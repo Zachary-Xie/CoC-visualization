@@ -5,6 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
 import json
+import time
 from typing import Dict, List, Tuple
 import warnings
 warnings.filterwarnings('ignore')
@@ -51,6 +52,17 @@ st.markdown("""
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         margin: 1rem 0;
     }
+    .time-control {
+        background-color: #f8f9fa;
+        padding: 1rem;
+        border-radius: 10px;
+        margin: 1rem 0;
+        border: 2px solid #e9ecef;
+    }
+    .play-button {
+        font-size: 1.5rem;
+        margin: 0.5rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -83,6 +95,12 @@ class EnhancedCoCVisualizer:
             'Unsheltered Chronically Homeless Individuals'
         ]
         
+        # Initialize session state for timeline controls
+        if 'auto_play' not in st.session_state:
+            st.session_state.auto_play = False
+        if 'current_year_index' not in st.session_state:
+            st.session_state.current_year_index = 0
+        
     @st.cache_data
     def load_data(_self):
         """Load GPKG geographic data"""
@@ -111,7 +129,7 @@ class EnhancedCoCVisualizer:
             st.error(f"❌ Failed to load GPKG file: {str(e)}")
             return None
     
-    def create_interactive_map(self, gdf_filtered, selected_indicator):
+    def create_interactive_map(self, gdf_filtered, selected_indicator, selected_year):
         """Create interactive map"""
         if len(gdf_filtered) == 0:
             return None
@@ -158,12 +176,12 @@ class EnhancedCoCVisualizer:
         max_val = max(values) if len(values) > 0 and max(values) > 0 else 1
         min_val = min(values) if len(values) > 0 else 0
         
-        # Marker size (8-40 pixels)
+        # Marker size (10-50 pixels for larger map)
         if max_val > min_val:
-            sizes = 8 + (values - min_val) / (max_val - min_val) * 32
+            sizes = 10 + (values - min_val) / (max_val - min_val) * 40
         else:
-            sizes = np.full(len(values), 15)  # Default size
-        sizes = np.clip(sizes, 8, 40)
+            sizes = np.full(len(values), 20)  # Default size
+        sizes = np.clip(sizes, 10, 50)
         
         # Add scatter layer
         fig.add_trace(go.Scattermapbox(
@@ -176,7 +194,10 @@ class EnhancedCoCVisualizer:
                 colorscale='Viridis',
                 showscale=True,
                 colorbar=dict(
-                    title=selected_indicator
+                    title=selected_indicator,
+                    titleside="right",
+                    thickness=15,
+                    len=0.7
                 ),
                 opacity=0.8
             ),
@@ -185,20 +206,20 @@ class EnhancedCoCVisualizer:
             name='CoC Areas'
         ))
         
-        # Map layout
+        # Map layout - larger size for full row
         fig.update_layout(
             mapbox=dict(
                 style="open-street-map",
                 center=dict(lat=center_lat, lon=center_lon),
-                zoom=3.2
+                zoom=3.5
             ),
-            height=700,
-            margin=dict(l=0, r=0, t=30, b=0),
+            height=800,  # Increased height for larger map
+            margin=dict(l=0, r=0, t=50, b=0),
             showlegend=False,
             title=dict(
-                text=f"{selected_indicator} Geographic Distribution",
+                text=f"{selected_indicator} Geographic Distribution - {selected_year}",
                 x=0.5,
-                font=dict(size=16, color='#1f4e79')
+                font=dict(size=20, color='#1f4e79')
             )
         )
         
@@ -374,12 +395,87 @@ class EnhancedCoCVisualizer:
         
         return fig
     
+    def create_timeline_controls(self, years):
+        """Create timeline controls with slider and auto-play functionality"""
+        st.markdown("""
+        <div class='time-control'>
+        <h3 style='text-align: center; color: #1f4e79; margin-bottom: 1rem;'>🕐 时间轴控制</h3>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Create two columns for controls
+        col1, col2, col3 = st.columns([1, 3, 1])
+        
+        with col1:
+            # Auto-play controls
+            if st.button("▶️ 开始播放" if not st.session_state.auto_play else "⏸️ 暂停播放"):
+                st.session_state.auto_play = not st.session_state.auto_play
+                if st.session_state.auto_play:
+                    st.rerun()
+        
+        with col2:
+            # Year slider
+            if st.session_state.auto_play:
+                # Auto-play mode: use session state index
+                if st.session_state.current_year_index >= len(years):
+                    st.session_state.current_year_index = 0
+                    st.session_state.auto_play = False
+                
+                selected_year_index = st.session_state.current_year_index
+                selected_year = years[selected_year_index]
+                
+                # Display slider but disabled during auto-play
+                st.slider(
+                    "选择年份",
+                    min_value=0,
+                    max_value=len(years)-1,
+                    value=selected_year_index,
+                    format_func=lambda x: str(years[x]),
+                    disabled=True,
+                    key="auto_year_slider"
+                )
+                
+                # Progress auto-play
+                time.sleep(1.5)  # Wait 1.5 seconds between years
+                st.session_state.current_year_index += 1
+                st.rerun()
+                
+            else:
+                # Manual mode: use interactive slider
+                selected_year_index = st.slider(
+                    "选择年份",
+                    min_value=0,
+                    max_value=len(years)-1,
+                    value=st.session_state.get('current_year_index', len(years)-1),
+                    format_func=lambda x: str(years[x]),
+                    key="manual_year_slider"
+                )
+                st.session_state.current_year_index = selected_year_index
+                selected_year = years[selected_year_index]
+        
+        with col3:
+            # Reset button
+            if st.button("🔄 重置"):
+                st.session_state.current_year_index = 0
+                st.session_state.auto_play = False
+                st.rerun()
+        
+        # Display current year prominently
+        st.markdown(f"""
+        <div style='text-align: center; margin: 1rem 0;'>
+            <h2 style='color: #1f4e79; font-size: 2.5rem; margin: 0;'>{selected_year}</h2>
+            <p style='color: #666; margin: 0;'>当前显示年份</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        return selected_year
+    
     def run(self):
         """Run main application"""
-        st.title("🏠 CoC Homeless Data Visualization System")
+        st.title("🏠 CoC 无家可归者数据可视化系统")
         st.markdown("""
         <div style='text-align: center; color: #666; margin-bottom: 2rem;'>
-            <p>Based on HUD CoC Data (2007-2024) | Interactive Geographic Data Visualization and Trend Analysis</p>
+            <p>基于 HUD CoC 数据 (2007-2024) | 交互式地理数据可视化与趋势分析</p>
         </div>
         """, unsafe_allow_html=True)
         
@@ -388,23 +484,18 @@ class EnhancedCoCVisualizer:
             self.gdf = self.load_data()
         
         if self.gdf is None:
-            st.error("❌ Unable to load data, please check if GPKG file exists")
+            st.error("❌ 无法加载数据，请检查 GPKG 文件是否存在")
             return
         
         # Sidebar control panel
-        st.sidebar.markdown("## 📊 Data Filtering and Controls")
+        st.sidebar.markdown("## 📊 数据筛选与控制")
         
-        # Year selection
+        # Get available years
         years = sorted(self.gdf['Year'].unique())
-        selected_year = st.sidebar.selectbox(
-            "🗓️ Select Year",
-            years,
-            index=len(years)-1
-        )
         
         # Indicator selection
         selected_indicator = st.sidebar.selectbox(
-            "📈 Select Analysis Indicator",
+            "📈 选择分析指标",
             self.homeless_indicators,
             index=0
         )
@@ -412,7 +503,7 @@ class EnhancedCoCVisualizer:
         # State selection
         states = sorted(self.gdf['State'].unique())
         selected_states = st.sidebar.multiselect(
-            "🗺️ Select States (leave empty to show all)",
+            "🗺️ 选择州（留空显示全部）",
             states,
             default=[]
         )
@@ -420,7 +511,7 @@ class EnhancedCoCVisualizer:
         # CoC category selection
         categories = sorted(self.gdf['CoC Category'].dropna().unique())
         selected_categories = st.sidebar.multiselect(
-            "🏘️ Select CoC Categories (leave empty to show all)",
+            "🏘️ 选择 CoC 类别（留空显示全部）",
             categories,
             default=[]
         )
@@ -432,12 +523,15 @@ class EnhancedCoCVisualizer:
             
             if max_val > min_val:
                 value_range = st.sidebar.slider(
-                    f"📊 {selected_indicator} Value Range",
+                    f"📊 {selected_indicator} 数值范围",
                     min_value=min_val,
                     max_value=max_val,
                     value=(min_val, max_val),
                     step=(max_val - min_val) / 100
                 )
+        
+        # Timeline controls (moved to main area)
+        selected_year = self.create_timeline_controls(years)
         
         # Data filtering
         gdf_filtered = self.gdf[self.gdf['Year'] == selected_year].copy()
@@ -456,57 +550,56 @@ class EnhancedCoCVisualizer:
         
         # Main content area
         if len(gdf_filtered) == 0:
-            st.warning("⚠️ No data matches the filter criteria")
+            st.warning("⚠️ 没有数据符合筛选条件")
             return
         
         # Display summary metrics
-        st.markdown(f"### 📊 {selected_year} Data Overview")
+        st.markdown(f"### 📊 {selected_year} 年数据概览")
         self.create_summary_metrics(gdf_filtered)
         
         st.markdown("---")
         
-        # Create column layout
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            # Display interactive map
-            st.markdown(f"### 🗺️ {selected_indicator} Geographic Distribution")
-            map_fig = self.create_interactive_map(gdf_filtered, selected_indicator)
-            if map_fig:
-                st.plotly_chart(map_fig, use_container_width=True)
-        
-        with col2:
-            # Display category analysis
-            st.markdown(f"### 📊 CoC Category Analysis")
-            category_fig = self.create_category_analysis(gdf_filtered, selected_indicator)
-            st.plotly_chart(category_fig, use_container_width=True)
+        # Large interactive map (full width)
+        st.markdown(f"### 🗺️ {selected_indicator} 地理分布")
+        map_fig = self.create_interactive_map(gdf_filtered, selected_indicator, selected_year)
+        if map_fig:
+            st.plotly_chart(map_fig, use_container_width=True)
         
         st.markdown("---")
         
-        # Trend analysis and state comparison
-        col3, col4 = st.columns(2)
+        # Create column layout for other charts
+        col1, col2 = st.columns([1, 1])
         
-        with col3:
-            st.markdown("### 📈 Time Trend Analysis")
-            trend_fig = self.create_trend_analysis(self.gdf, selected_states, selected_indicator)
-            st.plotly_chart(trend_fig, use_container_width=True)
+        with col1:
+            # Display category analysis
+            st.markdown(f"### 📊 CoC 类别分析")
+            category_fig = self.create_category_analysis(gdf_filtered, selected_indicator)
+            st.plotly_chart(category_fig, use_container_width=True)
         
-        with col4:
-            st.markdown("### 🏆 State Ranking Comparison")
+        with col2:
+            st.markdown("### 🏆 州排名比较")
             comparison_fig = self.create_state_comparison(gdf_filtered, selected_indicator)
             st.plotly_chart(comparison_fig, use_container_width=True)
         
         st.markdown("---")
         
-        # Correlation analysis
-        st.markdown("### 🔗 Indicator Correlation Analysis")
-        correlation_fig = self.create_correlation_analysis(gdf_filtered)
-        st.plotly_chart(correlation_fig, use_container_width=True)
+        # Trend analysis and correlation analysis
+        col3, col4 = st.columns(2)
+        
+        with col3:
+            st.markdown("### 📈 时间趋势分析")
+            trend_fig = self.create_trend_analysis(self.gdf, selected_states, selected_indicator)
+            st.plotly_chart(trend_fig, use_container_width=True)
+        
+        with col4:
+            st.markdown("### 🔗 指标相关性分析")
+            correlation_fig = self.create_correlation_analysis(gdf_filtered)
+            st.plotly_chart(correlation_fig, use_container_width=True)
         
         st.markdown("---")
         
         # Detailed data table
-        st.markdown("### 📋 Detailed Data Table")
+        st.markdown("### 📋 详细数据表")
         
         # Select columns to display
         display_cols = ['State', 'CoC Number', 'CoC Name', 'CoC Category', 'Region', 'Division']
@@ -526,7 +619,7 @@ class EnhancedCoCVisualizer:
             # Export filtered data
             csv_data = gdf_filtered.drop('geometry', axis=1).to_csv(index=False)
             st.download_button(
-                label="📥 Download Filtered Data (CSV)",
+                label="📥 下载筛选后数据 (CSV)",
                 data=csv_data,
                 file_name=f"coc_data_{selected_year}_{selected_indicator}.csv",
                 mime="text/csv"
@@ -537,7 +630,7 @@ class EnhancedCoCVisualizer:
             summary_stats = gdf_filtered.groupby(['State', 'CoC Category'])[self.homeless_indicators].sum().reset_index()
             summary_csv = summary_stats.to_csv(index=False)
             st.download_button(
-                label="📊 Download Summary Statistics (CSV)",
+                label="📊 下载汇总统计 (CSV)",
                 data=summary_csv,
                 file_name=f"coc_summary_{selected_year}.csv",
                 mime="text/csv"
@@ -547,13 +640,15 @@ class EnhancedCoCVisualizer:
         st.markdown("---")
         st.markdown("""
         <div style='text-align: center; color: #666; margin-top: 2rem;'>
-            <p><b>💡 Usage Tips:</b></p>
-            <p>• Hover over markers on the map to view detailed information</p>
-            <p>• Use the left control panel to filter different years, states, and indicators</p>
-            <p>• Time trend analysis shows annual changes in selected indicators</p>
-            <p>• Correlation analysis helps understand relationships between different indicators</p>
+            <p><b>💡 使用提示：</b></p>
+            <p>• 使用时间轴控制器查看不同年份的数据变化</p>
+            <p>• 点击"开始播放"按钮自动播放时间序列动画</p>
+            <p>• 鼠标悬停在地图标记上查看详细信息</p>
+            <p>• 使用左侧控制面板筛选不同州、指标和类别</p>
+            <p>• 时间趋势分析显示所选指标的年度变化</p>
+            <p>• 相关性分析帮助理解不同指标之间的关系</p>
             <hr style='margin: 1rem 0;'>
-            <p style='font-size: 0.9rem;'>Data Source: HUD Continuum of Care (CoC) Data | System Developed by: Enhanced CoC Visualizer</p>
+            <p style='font-size: 0.9rem;'>数据来源: HUD 无家可归者连续护理 (CoC) 数据 | 系统开发: 增强版 CoC 可视化器</p>
         </div>
         """, unsafe_allow_html=True)
 
