@@ -240,7 +240,17 @@ class EnhancedCoCVisualizer:
             title=dict(
                 text=f"{selected_indicator} Geographic Distribution - {selected_year}",
                 x=0.5,
+                y=0.98,
+                xanchor='center',
+                yanchor='top',
                 font=dict(size=20, color='#1f4e79')
+            ),
+            hoverlabel=dict(
+                bgcolor="white",
+                font_size=16,
+                font_family="Arial",
+                font_color="black",
+                bordercolor="gray"
             ),
             transition=dict(
                 duration=800,
@@ -253,6 +263,9 @@ class EnhancedCoCVisualizer:
     
     def create_summary_metrics(self, gdf_filtered):
         """Create summary metrics cards"""
+        current_year = gdf_filtered['Year'].iloc[0]
+        
+        # Current year data
         total_cocs = len(gdf_filtered)
         total_homeless = gdf_filtered['Overall Homeless'].sum()
         total_sheltered = gdf_filtered['Sheltered Total Homeless'].sum()
@@ -260,72 +273,141 @@ class EnhancedCoCVisualizer:
         total_individuals = gdf_filtered['Overall Homeless Individuals'].sum()
         total_families = gdf_filtered['Overall Homeless People in Families'].sum()
         total_chronic = gdf_filtered['Overall Chronically Homeless Individuals'].sum()
+        family_households = gdf_filtered['Overall Homeless Family Households'].sum()
         
-        # Calculate percentages
+        # Calculate composition percentages
         sheltered_pct = (total_sheltered / total_homeless * 100) if total_homeless > 0 else 0
         unsheltered_pct = (total_unsheltered / total_homeless * 100) if total_homeless > 0 else 0
+        individuals_pct = (total_individuals / total_homeless * 100) if total_homeless > 0 else 0
+        families_pct = (total_families / total_homeless * 100) if total_homeless > 0 else 0
         chronic_pct = (total_chronic / total_homeless * 100) if total_homeless > 0 else 0
+        
+        # Calculate year-over-year changes
+        def get_yoy_change(current_val, indicator, states=None, categories=None):
+            # Don't show YoY change for 2007 (first year)
+            if current_year <= 2007:
+                return ""
+            
+            try:
+                prev_year = current_year - 1
+                prev_data = self.gdf[self.gdf['Year'] == prev_year].copy()
+                
+                # Apply same filters as current data
+                if states:
+                    prev_data = prev_data[prev_data['State'].isin(states)]
+                if categories:
+                    prev_data = prev_data[prev_data['CoC Category'].isin(categories)]
+                
+                if len(prev_data) > 0:
+                    prev_val = prev_data[indicator].sum()
+                    if prev_val > 0:
+                        change_pct = ((current_val - prev_val) / prev_val) * 100
+                        color = "#09ab3b" if change_pct >= 0 else "#dc2626"
+                        return f"<span style='color: {color};'>{change_pct:+.1f}%</span>"
+                return "<span style='color: #64748b;'>N/A</span>"
+            except:
+                return "<span style='color: #64748b;'>N/A</span>"
+        
+        # Get filter states and categories for YoY calculation
+        filter_states = None
+        filter_categories = None
+        if hasattr(self, '_current_filter_states'):
+            filter_states = self._current_filter_states
+        if hasattr(self, '_current_filter_categories'):
+            filter_categories = self._current_filter_categories
         
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.metric(
-                "Total CoC Areas",
-                f"{total_cocs:,}",
-                delta=None
-            )
+            st.markdown(f"""
+            <div style='background-color: white; padding: 1.2rem; border-radius: 0.5rem; border: 1px solid #e1e5e9; height: 120px; display: flex; flex-direction: column; justify-content: space-between;'>
+                <div style='color: #262730; font-size: 0.875rem; font-weight: 600; margin-bottom: 0.5rem;'>Total CoC Areas</div>
+                <div style='color: #262730; font-size: 1.875rem; font-weight: 700; line-height: 1;'>{total_cocs:,}</div>
+                <div style='height: 20px;'></div>
+            </div>
+            """, unsafe_allow_html=True)
             
         with col2:
-            st.metric(
-                "Total Homeless",
-                f"{total_homeless:,.0f}",
-                delta=None
-            )
+            yoy_homeless = get_yoy_change(total_homeless, 'Overall Homeless', filter_states, filter_categories)
+            st.markdown(f"""
+            <div style='background-color: white; padding: 1.2rem; border-radius: 0.5rem; border: 1px solid #e1e5e9; height: 120px; display: flex; flex-direction: column; justify-content: space-between;'>
+                <div style='color: #262730; font-size: 0.875rem; font-weight: 600; margin-bottom: 0.5rem;'>Total Homeless</div>
+                <div style='color: #262730; font-size: 1.875rem; font-weight: 700; line-height: 1;'>{total_homeless:,.0f}</div>
+                <div style='font-size: 0.875rem; height: 20px; display: flex; align-items: center;'>{yoy_homeless}</div>
+            </div>
+            """, unsafe_allow_html=True)
             
         with col3:
-            st.metric(
-                "Sheltered",
-                f"{total_sheltered:,.0f}",
-                delta=f"{sheltered_pct:.1f}%"
-            )
+            yoy_sheltered = get_yoy_change(total_sheltered, 'Sheltered Total Homeless', filter_states, filter_categories)
+            st.markdown(f"""
+            <div style='background-color: white; padding: 1.2rem; border-radius: 0.5rem; border: 1px solid #e1e5e9; height: 120px; display: flex; flex-direction: column; justify-content: space-between;'>
+                <div style='color: #262730; font-size: 0.875rem; font-weight: 600; margin-bottom: 0.5rem;'>Sheltered</div>
+                <div style='color: #262730; font-size: 1.875rem; font-weight: 700; line-height: 1;'>
+                    {total_sheltered:,.0f} <span style='font-size: 0.875rem; color: #64748b;'>({sheltered_pct:.1f}%)</span>
+                </div>
+                <div style='font-size: 0.875rem; height: 20px; display: flex; align-items: center;'>{yoy_sheltered}</div>
+            </div>
+            """, unsafe_allow_html=True)
             
         with col4:
-            st.metric(
-                "Unsheltered", 
-                f"{total_unsheltered:,.0f}",
-                delta=f"{unsheltered_pct:.1f}%"
-            )
+            yoy_unsheltered = get_yoy_change(total_unsheltered, 'Unsheltered Homeless', filter_states, filter_categories)
+            st.markdown(f"""
+            <div style='background-color: white; padding: 1.2rem; border-radius: 0.5rem; border: 1px solid #e1e5e9; height: 120px; display: flex; flex-direction: column; justify-content: space-between;'>
+                <div style='color: #262730; font-size: 0.875rem; font-weight: 600; margin-bottom: 0.5rem;'>Unsheltered</div>
+                <div style='color: #262730; font-size: 1.875rem; font-weight: 700; line-height: 1;'>
+                    {total_unsheltered:,.0f} <span style='font-size: 0.875rem; color: #64748b;'>({unsheltered_pct:.1f}%)</span>
+                </div>
+                <div style='font-size: 0.875rem; height: 20px; display: flex; align-items: center;'>{yoy_unsheltered}</div>
+            </div>
+            """, unsafe_allow_html=True)
         
         col5, col6, col7, col8 = st.columns(4)
         
         with col5:
-            st.metric(
-                "Individuals", 
-                f"{total_individuals:,.0f}",
-                delta=f"{total_individuals/total_homeless*100:.1f}%" if total_homeless > 0 else "0%"
-            )
+            yoy_individuals = get_yoy_change(total_individuals, 'Overall Homeless Individuals', filter_states, filter_categories)
+            st.markdown(f"""
+            <div style='background-color: white; padding: 1.2rem; border-radius: 0.5rem; border: 1px solid #e1e5e9; height: 120px; display: flex; flex-direction: column; justify-content: space-between;'>
+                <div style='color: #262730; font-size: 0.875rem; font-weight: 600; margin-bottom: 0.5rem;'>Individuals</div>
+                <div style='color: #262730; font-size: 1.875rem; font-weight: 700; line-height: 1;'>
+                    {total_individuals:,.0f} <span style='font-size: 0.875rem; color: #64748b;'>({individuals_pct:.1f}%)</span>
+                </div>
+                <div style='font-size: 0.875rem; height: 20px; display: flex; align-items: center;'>{yoy_individuals}</div>
+            </div>
+            """, unsafe_allow_html=True)
             
         with col6:
-            st.metric(
-                "People in Families",
-                f"{total_families:,.0f}",
-                delta=f"{total_families/total_homeless*100:.1f}%" if total_homeless > 0 else "0%"
-            )
+            yoy_families = get_yoy_change(total_families, 'Overall Homeless People in Families', filter_states, filter_categories)
+            st.markdown(f"""
+            <div style='background-color: white; padding: 1.2rem; border-radius: 0.5rem; border: 1px solid #e1e5e9; height: 120px; display: flex; flex-direction: column; justify-content: space-between;'>
+                <div style='color: #262730; font-size: 0.875rem; font-weight: 600; margin-bottom: 0.5rem;'>People in Families</div>
+                <div style='color: #262730; font-size: 1.875rem; font-weight: 700; line-height: 1;'>
+                    {total_families:,.0f} <span style='font-size: 0.875rem; color: #64748b;'>({families_pct:.1f}%)</span>
+                </div>
+                <div style='font-size: 0.875rem; height: 20px; display: flex; align-items: center;'>{yoy_families}</div>
+            </div>
+            """, unsafe_allow_html=True)
             
         with col7:
-            st.metric(
-                "Chronically Homeless",
-                f"{total_chronic:,.0f}",
-                delta=f"{chronic_pct:.1f}%"
-            )
+            yoy_chronic = get_yoy_change(total_chronic, 'Overall Chronically Homeless Individuals', filter_states, filter_categories)
+            st.markdown(f"""
+            <div style='background-color: white; padding: 1.2rem; border-radius: 0.5rem; border: 1px solid #e1e5e9; height: 120px; display: flex; flex-direction: column; justify-content: space-between;'>
+                <div style='color: #262730; font-size: 0.875rem; font-weight: 600; margin-bottom: 0.5rem;'>Chronically Homeless</div>
+                <div style='color: #262730; font-size: 1.875rem; font-weight: 700; line-height: 1;'>
+                    {total_chronic:,.0f} <span style='font-size: 0.875rem; color: #64748b;'>({chronic_pct:.1f}%)</span>
+                </div>
+                <div style='font-size: 0.875rem; height: 20px; display: flex; align-items: center;'>{yoy_chronic}</div>
+            </div>
+            """, unsafe_allow_html=True)
             
         with col8:
-            family_households = gdf_filtered['Overall Homeless Family Households'].sum()
-            st.metric(
-                "Family Households",
-                f"{family_households:,.0f}",
-                delta=None
-            )
+            yoy_households = get_yoy_change(family_households, 'Overall Homeless Family Households', filter_states, filter_categories)
+            st.markdown(f"""
+            <div style='background-color: white; padding: 1.2rem; border-radius: 0.5rem; border: 1px solid #e1e5e9; height: 120px; display: flex; flex-direction: column; justify-content: space-between;'>
+                <div style='color: #262730; font-size: 0.875rem; font-weight: 600; margin-bottom: 0.5rem;'>Family Households</div>
+                <div style='color: #262730; font-size: 1.875rem; font-weight: 700; line-height: 1;'>{family_households:,.0f}</div>
+                <div style='font-size: 0.875rem; height: 20px; display: flex; align-items: center;'>{yoy_households}</div>
+            </div>
+            """, unsafe_allow_html=True)
     
     def create_trend_analysis(self, gdf, selected_states, selected_indicator):
         """Create time trend analysis"""
@@ -340,16 +422,33 @@ class EnhancedCoCVisualizer:
             trend_data, 
             x='Year', 
             y=selected_indicator,
-            title=title,
-            markers=True
+            markers=True,
+            line_shape='spline'
         )
         
         fig.update_layout(
             height=400,
             xaxis_title="Year",
             yaxis_title=selected_indicator,
-            title_x=0.5,
-            title_font_size=16
+            title=dict(
+                text=title,
+                x=0.5,
+                y=0.95,
+                xanchor='center',
+                yanchor='top',
+                font=dict(size=18, color='#1f4e79', family='Arial')
+            ),
+            font=dict(family='Arial', size=12),
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            margin=dict(l=50, r=50, t=80, b=50),
+            hoverlabel=dict(
+                bgcolor="white",
+                font_size=16,
+                font_family="Arial",
+                font_color="black",
+                bordercolor="gray"
+            )
         )
         
         return fig
@@ -362,14 +461,32 @@ class EnhancedCoCVisualizer:
             x=state_stats.values,
             y=state_stats.index,
             orientation='h',
-            title=f"Top 15 States by {selected_indicator}",
-            labels={'x': selected_indicator, 'y': 'State'}
+            labels={'x': selected_indicator, 'y': 'State'},
+            color=state_stats.values,
+            color_continuous_scale='Viridis'
         )
         
         fig.update_layout(
             height=500,
-            title_x=0.5,
-            title_font_size=16
+            title=dict(
+                text=f"Top 15 States by {selected_indicator}",
+                x=0.5,
+                y=0.95,
+                xanchor='center',
+                yanchor='top',
+                font=dict(size=18, color='#1f4e79', family='Arial')
+            ),
+            font=dict(family='Arial', size=12),
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            margin=dict(l=80, r=50, t=80, b=50),
+            hoverlabel=dict(
+                bgcolor="white",
+                font_size=16,
+                font_family="Arial",
+                font_color="black",
+                bordercolor="gray"
+            )
         )
         
         return fig
@@ -378,16 +495,61 @@ class EnhancedCoCVisualizer:
         """Create CoC category analysis"""
         category_stats = gdf_filtered.groupby('CoC Category')[selected_indicator].sum()
         
+        # Create color palette
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
+        
         fig = px.pie(
             values=category_stats.values,
             names=category_stats.index,
-            title=f"CoC Category {selected_indicator} Distribution"
+            color_discrete_sequence=colors,
+            hole=0.3  # Creates a donut chart for better visual appeal
+        )
+        
+        # Update traces for better styling
+        fig.update_traces(
+            textposition='inside',
+            textinfo='percent+label',
+            textfont=dict(size=12, color='white', family='Arial'),
+            marker=dict(
+                line=dict(color='white', width=2)
+            ),
+            hovertemplate='<b style="font-size:16px">%{label}</b><br>' +
+                         '<span style="font-size:14px">Value: %{value:,.0f}</span><br>' +
+                         '<span style="font-size:14px">Percentage: %{percent}</span><br>' +
+                         '<extra></extra>',
+            pull=[0.05 if i == category_stats.values.argmax() else 0 for i in range(len(category_stats))]  # Pull out the largest slice
         )
         
         fig.update_layout(
-            height=400,
-            title_x=0.5,
-            title_font_size=16
+            height=500,
+            title=dict(
+                text=f"CoC Category {selected_indicator} Distribution",
+                x=0.5,
+                y=0.95,
+                xanchor='center',
+                yanchor='top',
+                font=dict(size=18, color='#1f4e79', family='Arial')
+            ),
+            font=dict(family='Arial', size=12),
+            legend=dict(
+                orientation='v',
+                yanchor='middle',
+                y=0.5,
+                xanchor='left',
+                x=1.05,
+                font=dict(size=11)
+            ),
+            margin=dict(l=20, r=120, t=80, b=20),
+            showlegend=True,
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            hoverlabel=dict(
+                bgcolor="white",
+                font_size=16,
+                font_family="Arial",
+                font_color="black",
+                bordercolor="gray"
+            )
         )
         
         return fig
@@ -405,18 +567,74 @@ class EnhancedCoCVisualizer:
         ]
         
         correlation_data = gdf_filtered[key_indicators].corr()
+        # Convert to absolute values for 0-1 range (correlation strength)
+        abs_correlation_data = correlation_data.abs()
         
         fig = px.imshow(
-            correlation_data,
-            title="Key Indicators Correlation Analysis",
-            color_continuous_scale="RdBu_r",
-            aspect="auto"
+            abs_correlation_data,
+            color_continuous_scale=[[0, '#f7f7f7'], [0.2, '#c6dbef'], [0.4, '#6baed6'], [0.6, '#3182bd'], [0.8, '#08519c'], [1, '#08306b']],
+            aspect="auto",
+            text_auto=False,  # Disable auto text to use custom annotations
+            zmin=0,
+            zmax=1
         )
+        
+        # Add correlation values as text annotations with dynamic color
+        fig.update_traces(
+            text=[],  # Remove default text to avoid overlap
+            hovertemplate='<b style="font-size:16px">%{x}</b> vs <b style="font-size:16px">%{y}</b><br>' +
+                         '<span style="font-size:14px">Correlation Strength: %{z:.2f}</span><extra></extra>'
+        )
+        
+        # Update text color based on correlation strength for better readability
+        for i in range(len(abs_correlation_data.index)):
+            for j in range(len(abs_correlation_data.columns)):
+                abs_corr_val = abs_correlation_data.iloc[i, j]
+                # Use dark text for light colors (low correlation), white text for dark colors (high correlation)
+                text_color = 'white' if abs_corr_val > 0.5 else 'black'
+                fig.add_annotation(
+                    x=j, y=i,
+                    text=f"{abs_corr_val:.2f}",
+                    showarrow=False,
+                    font=dict(color=text_color, size=11, family='Arial')
+                )
         
         fig.update_layout(
             height=500,
-            title_x=0.5,
-            title_font_size=16
+            title=dict(
+                text="Key Indicators Correlation Strength Analysis",
+                x=0.5,
+                y=0.95,
+                xanchor='center',
+                yanchor='top',
+                font=dict(size=18, color='#1f4e79', family='Arial')
+            ),
+            font=dict(family='Arial', size=12),
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            margin=dict(l=50, r=150, t=80, b=50),
+            hoverlabel=dict(
+                bgcolor="white",
+                font_size=16,
+                font_family="Arial",
+                font_color="black",
+                bordercolor="gray"
+            )
+        )
+        
+        # Update colorbar for better professional appearance
+        fig.update_coloraxes(
+            colorbar=dict(
+                title=dict(
+                    text="Correlation<br>Strength",
+                    font=dict(size=12, family='Arial')
+                ),
+                tickvals=[0, 0.2, 0.4, 0.6, 0.8, 1.0],
+                ticktext=['0.0', '0.2', '0.4', '0.6', '0.8', '1.0'],
+                tickfont=dict(size=11, family='Arial'),
+                len=0.8,
+                thickness=20
+            )
         )
         
         return fig
@@ -566,6 +784,10 @@ class EnhancedCoCVisualizer:
         # Data filtering
         gdf_filtered = self.gdf[self.gdf['Year'] == selected_year].copy()
         
+        # Store current filter states for YoY comparison
+        self._current_filter_states = selected_states if selected_states else None
+        self._current_filter_categories = selected_categories if selected_categories else None
+        
         if selected_states:
             gdf_filtered = gdf_filtered[gdf_filtered['State'].isin(selected_states)]
         
@@ -584,7 +806,9 @@ class EnhancedCoCVisualizer:
             return
         
         # Display summary metrics
-        st.markdown(f"### 📊 {selected_year} Data Overview")
+        st.markdown(f"""
+        <h3 style='text-align: center; color: #1f4e79; margin: 1rem 0;'>📊 {selected_year} Data Overview</h3>
+        """, unsafe_allow_html=True)
         self.create_summary_metrics(gdf_filtered)
         
         st.markdown("---")
@@ -607,12 +831,16 @@ class EnhancedCoCVisualizer:
         
         with col1:
             # Display category analysis
-            st.markdown(f"### 📊 CoC Category Analysis")
+            st.markdown("""
+            <h3 style='text-align: center; color: #1f4e79; margin: 1rem 0;'>📊 CoC Category Analysis</h3>
+            """, unsafe_allow_html=True)
             category_fig = self.create_category_analysis(gdf_filtered, selected_indicator)
             st.plotly_chart(category_fig, use_container_width=True)
         
         with col2:
-            st.markdown("### 🏆 State Ranking Comparison")
+            st.markdown("""
+            <h3 style='text-align: center; color: #1f4e79; margin: 1rem 0;'>🏆 State Ranking Comparison</h3>
+            """, unsafe_allow_html=True)
             comparison_fig = self.create_state_comparison(gdf_filtered, selected_indicator)
             st.plotly_chart(comparison_fig, use_container_width=True)
         
@@ -622,19 +850,25 @@ class EnhancedCoCVisualizer:
         col3, col4 = st.columns(2)
         
         with col3:
-            st.markdown("### 📈 Time Trend Analysis")
+            st.markdown("""
+            <h3 style='text-align: center; color: #1f4e79; margin: 1rem 0;'>📈 Time Trend Analysis</h3>
+            """, unsafe_allow_html=True)
             trend_fig = self.create_trend_analysis(self.gdf, selected_states, selected_indicator)
             st.plotly_chart(trend_fig, use_container_width=True)
         
         with col4:
-            st.markdown("### 🔗 Indicator Correlation Analysis")
+            st.markdown("""
+            <h3 style='text-align: center; color: #1f4e79; margin: 1rem 0;'>🔗 Indicator Correlation Analysis</h3>
+            """, unsafe_allow_html=True)
             correlation_fig = self.create_correlation_analysis(gdf_filtered)
             st.plotly_chart(correlation_fig, use_container_width=True)
         
         st.markdown("---")
         
         # Detailed data table
-        st.markdown("### 📋 Detailed Data Table")
+        st.markdown("""
+        <h3 style='text-align: center; color: #1f4e79; margin: 1rem 0;'>📋 Detailed Data Table</h3>
+        """, unsafe_allow_html=True)
         
         # Select columns to display
         display_cols = ['State', 'CoC Number', 'CoC Name', 'CoC Category', 'Region', 'Division']
