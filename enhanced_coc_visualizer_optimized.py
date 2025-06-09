@@ -9,6 +9,21 @@ from typing import Dict, List, Tuple
 import warnings
 warnings.filterwarnings('ignore')
 
+# Streamlit版本兼容性处理
+def safe_rerun():
+    """安全的重新运行函数，兼容不同版本的Streamlit"""
+    try:
+        if hasattr(st, 'rerun'):
+            st.rerun()
+        elif hasattr(st, 'experimental_rerun'):
+            st.experimental_rerun()
+        else:
+            # 对于非常旧的版本，使用session state变化来触发重新运行
+            st.session_state._rerun_trigger = not st.session_state.get('_rerun_trigger', False)
+    except Exception:
+        # 如果所有方法都失败，静默处理
+        pass
+
 # Page configuration
 st.set_page_config(
     page_title="CoC Homeless Data Visualization | 2007-2024",
@@ -54,6 +69,23 @@ st.markdown("""
     .map-container {
         position: relative;
         margin-top: 10px;
+    }
+    /* 优化侧边栏按钮在窄宽度下的显示 */
+    .sidebar .element-container button {
+        font-size: 0.85rem !important;
+        padding: 0.25rem 0.5rem !important;
+        width: 100% !important;
+        text-align: center !important;
+    }
+    /* 优化滑块标签显示 */
+    .sidebar .stSlider > label {
+        font-size: 0.9rem !important;
+        margin-bottom: 0.5rem !important;
+    }
+    /* 优化数字输入框 */
+    .sidebar .stNumberInput > label {
+        font-size: 0.9rem !important;
+        margin-bottom: 0.5rem !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -414,66 +446,59 @@ class EnhancedCoCVisualizer:
         </div>
         """, unsafe_allow_html=True)
         
-        # Year input box
-        col1, col2 = st.sidebar.columns([2, 1])
-        with col1:
-            year_input = st.number_input(
-                "Go to Year:",
-                min_value=years[0],
-                max_value=years[-1],
-                value=current_year,
-                step=1,
-                key="year_input"
-            )
-        with col2:
-            if st.button("Go", key="go_to_year"):
-                if year_input in years:
-                    st.session_state.current_year_index = years.index(year_input)
-                    st.rerun()
-                else:
-                    st.sidebar.error(f"Year {year_input} not available")
+        # Year input box with improved compact layout
+        year_input = st.sidebar.number_input(
+            "Go to Year:",
+            min_value=years[0],
+            max_value=years[-1],
+            value=current_year,
+            step=1,
+            key="year_input"
+        )
         
-        # Navigation buttons
+        # Go button (full width for better narrow sidebar support)
+        if st.sidebar.button("📅 Go to Year", key="go_to_year", use_container_width=True):
+            if year_input in years:
+                st.session_state.current_year_index = years.index(year_input)
+                safe_rerun()
+            else:
+                st.sidebar.error(f"Year {year_input} not available")
+        
+        # Navigation buttons with compact layout
         col1, col2 = st.sidebar.columns(2)
         with col1:
-            if st.button("⬅️ Previous", key="prev_year", use_container_width=True):
+            if st.button("⬅️ Prev", key="prev_year", use_container_width=True):
                 if st.session_state.current_year_index > 0:
                     st.session_state.current_year_index -= 1
-                st.rerun()
+                safe_rerun()
         
         with col2:
             if st.button("Next ➡️", key="next_year", use_container_width=True):
                 if st.session_state.current_year_index < len(years) - 1:
                     st.session_state.current_year_index += 1
-                st.rerun()
+                safe_rerun()
         
-        # Main year slider
-        selected_year_index = st.sidebar.slider(
+        # Main year slider - showing actual years instead of indices
+        selected_year = st.sidebar.slider(
             "Year Slider:",
-            min_value=0,
-            max_value=len(years)-1,
-            value=st.session_state.current_year_index,
-            key="sidebar_year_slider"
+            min_value=years[0],
+            max_value=years[-1],
+            value=current_year,
+            step=1,
+            key="sidebar_year_slider",
+            format="%d"
         )
         
-        # Display year range
-        st.sidebar.markdown(f"""
-        <div style='text-align: center; margin-top: -10px; margin-bottom: 10px; color: #666; font-size: 0.8rem;'>
-            Range: {years[0]} ←→ {years[-1]}
-        </div>
-        """, unsafe_allow_html=True)
+        # Update session state when slider changes
+        if selected_year != current_year:
+            st.session_state.current_year_index = years.index(selected_year)
         
-        # Update session state when manually changed
-        if selected_year_index != st.session_state.current_year_index:
-            st.session_state.current_year_index = selected_year_index
-        
-        # Reset button
-        if st.sidebar.button("🔄 Reset to Latest Year", key="reset_to_latest", use_container_width=True):
+        # Reset button with compact text
+        if st.sidebar.button("🔄 Reset to 2024", key="reset_to_latest", use_container_width=True):
             st.session_state.current_year_index = len(years) - 1
-            st.rerun()
+            safe_rerun()
         
-        selected_year = years[st.session_state.current_year_index]
-        return selected_year
+        return years[st.session_state.current_year_index]
     
     def run(self):
         """Run main application"""
