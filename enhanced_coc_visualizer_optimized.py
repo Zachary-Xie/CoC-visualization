@@ -116,21 +116,28 @@ class EnhancedCoCVisualizer:
             'Unsheltered Homeless Family Households',
             'Overall Chronically Homeless Individuals',
             'Sheltered Total Chronically Homeless Individuals',
-            'Unsheltered Chronically Homeless Individuals'
+            'Unsheltered Chronically Homeless Individuals',
+            'Total Year-Round Beds (ES, TH, SH)',
+            'Total Year-Round Beds (ES)',
+            'Total Year-Round Beds (TH)',
+            'Total Year-Round Beds (SH)'
         ]
         
-        # Initialize session state for timeline controls
+        # Initialize session state for timeline controls - will be set to 2024 in run()
         if 'current_year_index' not in st.session_state:
-            st.session_state.current_year_index = 0
+            st.session_state.current_year_index = 999  # Flag for first initialization (will be reset to latest year)
         
     @st.cache_data
     def load_data(_self):
         """Load GPKG geographic data"""
         try:
-            gdf = gpd.read_file("Final_CoC_Time_Data_optimized.gpkg")
+            gdf = gpd.read_file("Final_CoC_Time_Data_with_Beds_Corrected_SH.gpkg")
             
-            # Data cleaning
+            # Data cleaning - remove NaN years first
             gdf = gdf.dropna(subset=['CoC Number', 'CoC Name', 'Year'])
+            
+            # Remove any remaining NaN values in Year column
+            gdf = gdf[gdf['Year'].notna()]
             
             # Convert year to integer
             gdf['Year'] = gdf['Year'].astype(int)
@@ -186,7 +193,16 @@ class EnhancedCoCVisualizer:
             text += f"<b>{selected_indicator}: {row[selected_indicator]:,.0f}</b><br>"
             text += f"Total Homeless: {row['Overall Homeless']:,.0f}<br>"
             text += f"Sheltered: {row['Sheltered Total Homeless']:,.0f}<br>"
-            text += f"Unsheltered: {row['Unsheltered Homeless']:,.0f}"
+            text += f"Unsheltered: {row['Unsheltered Homeless']:,.0f}<br>"
+            
+            # Add bed information if available
+            if 'Total Year-Round Beds (ES, TH, SH)' in row.index:
+                text += f"<br><b>Bed Information:</b><br>"
+                text += f"Total Beds (ES+TH+SH): {row.get('Total Year-Round Beds (ES, TH, SH)', 0):,.0f}<br>"
+                text += f"Emergency Shelter Beds (ES): {row.get('Total Year-Round Beds (ES)', 0):,.0f}<br>"
+                text += f"Transitional Housing Beds (TH): {row.get('Total Year-Round Beds (TH)', 0):,.0f}<br>"
+                text += f"Safe Haven Beds (SH): {row.get('Total Year-Round Beds (SH)', 0):,.0f}"
+                
             hover_text.append(text)
         
         # Calculate marker size and color
@@ -230,7 +246,7 @@ class EnhancedCoCVisualizer:
         # Map layout - larger size for full row with smooth transitions
         fig.update_layout(
             mapbox=dict(
-                style="open-street-map",
+                style="carto-positron",
                 center=dict(lat=center_lat, lon=center_lon),
                 zoom=3.5
             ),
@@ -638,6 +654,425 @@ class EnhancedCoCVisualizer:
         )
         
         return fig
+
+    def create_bivariate_change_map(self, _gdf, selected_year):
+        """Create bivariate choropleth map: Bed capacity vs Unsheltered homeless changes (current year vs previous year)"""
+        try:
+            if selected_year <= 2007:
+                st.subheader("📊 Bivariate Change Analysis Map")
+                st.info("🔔 **Note**: 2007 is the baseline year with no previous year data for comparison.")
+                return None
+            
+            previous_year = selected_year - 1
+            st.subheader(f"📊 Bivariate Change Analysis Map ({previous_year} → {selected_year})")
+            st.info(f"🔔 **Analysis Description**: This analysis shows the change trends of {selected_year} relative to {previous_year}.")
+            st.write("Shows the relationship between bed capacity changes and unsheltered homeless population changes")
+            
+            # Step 1: Calculate percentage change indicators
+            st.write(f"Calculating change indicators from {previous_year} to {selected_year}...")
+            
+            # 获取前一年和当前年数据
+            data_previous = _gdf[_gdf['Year'] == previous_year].copy()
+            data_current = _gdf[_gdf['Year'] == selected_year].copy()
+            
+            if len(data_previous) == 0 or len(data_current) == 0:
+                st.warning(f"Missing data for {previous_year} or {selected_year}, cannot perform change analysis")
+                return None
+            
+            # 合并数据以计算变化
+            change_data = data_previous[['CoC Number', 'CoC Name', 'State', 'geometry', 
+                                       'Total Year-Round Beds (ES, TH, SH)', 'Unsheltered Homeless']].merge(
+                data_current[['CoC Number', 'Total Year-Round Beds (ES, TH, SH)', 'Unsheltered Homeless']], 
+                on='CoC Number', suffixes=(f'_{previous_year}', f'_{selected_year}'), how='inner'
+            )
+            
+            if len(change_data) == 0:
+                st.warning(f"No CoC data found that exists in both {previous_year} and {selected_year}")
+                return None
+            
+            # 计算百分比变化，处理除零错误
+            def safe_percentage_change(new_val, old_val, max_cap=999):
+                if pd.isna(old_val) or pd.isna(new_val):
+                    return np.nan
+                if old_val == 0:
+                    return max_cap if new_val > 0 else 0
+                return ((new_val - old_val) / old_val) * 100
+            
+            change_data['Beds_Change_Pct'] = change_data.apply(
+                lambda row: safe_percentage_change(
+                    row[f'Total Year-Round Beds (ES, TH, SH)_{selected_year}'], 
+                    row[f'Total Year-Round Beds (ES, TH, SH)_{previous_year}']
+                ), axis=1
+            )
+            
+            change_data['Unsheltered_Change_Pct'] = change_data.apply(
+                lambda row: safe_percentage_change(
+                    row[f'Unsheltered Homeless_{selected_year}'], 
+                    row[f'Unsheltered Homeless_{previous_year}']
+                ), axis=1
+            )
+            
+            # 移除无效数据
+            change_data = change_data.dropna(subset=['Beds_Change_Pct', 'Unsheltered_Change_Pct'])
+            
+            # 步骤2: 创建分级分类
+            def classify_beds_change(pct):
+                if pct < 0:
+                    return 'B1'  # 减少
+                elif pct < 50:
+                    return 'B2'  # 低/中度增长
+                else:
+                    return 'B3'  # 高增长
+            
+            def classify_unsheltered_change(pct):
+                if pct > 0:
+                    return 'U1'  # 增加
+                elif pct > -50:
+                    return 'U2'  # 轻微减少
+                else:
+                    return 'U3'  # 显著减少
+            
+            change_data['Beds_Class'] = change_data['Beds_Change_Pct'].apply(classify_beds_change)
+            change_data['Unsheltered_Class'] = change_data['Unsheltered_Change_Pct'].apply(classify_unsheltered_change)
+            change_data['Bivariate_Class'] = change_data['Beds_Class'] + '-' + change_data['Unsheltered_Class']
+            
+            # 步骤3: 定义颜色方案
+            bivariate_colors = {
+                'B1-U1': '#8e6d8a',  # 床位减少，无庇护者增加 - 紫色
+                'B1-U2': '#a6bddb',  # 床位减少，无庇护者轻微减少 - 浅蓝
+                'B1-U3': '#2b8cbe',  # 床位减少，无庇护者显著减少 - 蓝色
+                'B2-U1': '#c85a5a',  # 床位低/中增长，无庇护者增加 - 红色
+                'B2-U2': '#e0e0e0',  # 床位低/中增长，无庇护者轻微减少 - 灰色（稳定）
+                'B2-U3': '#74c476',  # 床位低/中增长，无庇护者显著减少 - 绿色
+                'B3-U1': '#ad3a3a',  # 床位高增长，无庇护者增加 - 深红（警示）
+                'B3-U2': '#a1d99b',  # 床位高增长，无庇护者轻微减少 - 浅绿
+                'B3-U3': '#31a354',  # 床位高增长，无庇护者显著减少 - 深绿（理想）
+            }
+            
+            # 添加颜色到数据
+            change_data['Color'] = change_data['Bivariate_Class'].map(bivariate_colors)
+            
+            # 创建地图
+            try:
+                centroids = change_data.geometry.centroid
+                lats = [point.y if hasattr(point, 'y') else 39.8283 for point in centroids]
+                lons = [point.x if hasattr(point, 'x') else -98.5795 for point in centroids]
+            except Exception as e:
+                st.warning(f"几何数据处理错误: {str(e)}")
+                lats = [39.8283] * len(change_data)
+                lons = [-98.5795] * len(change_data)
+            
+            # 创建悬停文本
+            hover_text = []
+            for _, row in change_data.iterrows():
+                text = f"<b>{row['CoC Name']}</b><br>"
+                text += f"CoC Number: {row['CoC Number']}<br>"
+                text += f"State: {row['State']}<br><br>"
+                text += f"<b>Bed Changes ({previous_year}-{selected_year}):</b><br>"
+                text += f"{previous_year}: {row[f'Total Year-Round Beds (ES, TH, SH)_{previous_year}']:,.0f}<br>"
+                text += f"{selected_year}: {row[f'Total Year-Round Beds (ES, TH, SH)_{selected_year}']:,.0f}<br>"
+                text += f"Change: {row['Beds_Change_Pct']:+.1f}%<br><br>"
+                text += f"<b>Unsheltered Changes ({previous_year}-{selected_year}):</b><br>"
+                text += f"{previous_year}: {row[f'Unsheltered Homeless_{previous_year}']:,.0f}<br>"
+                text += f"{selected_year}: {row[f'Unsheltered Homeless_{selected_year}']:,.0f}<br>"
+                text += f"Change: {row['Unsheltered_Change_Pct']:+.1f}%<br><br>"
+                text += f"<b>Category:</b> {row['Bivariate_Class']}"
+                hover_text.append(text)
+            
+            # 创建图表
+            fig = go.Figure()
+            
+            fig.add_trace(go.Scattermapbox(
+                lat=lats,
+                lon=lons,
+                mode='markers',
+                marker=dict(
+                    size=10,
+                    color=change_data['Color'],
+                    opacity=0.8
+                ),
+                text=hover_text,
+                hovertemplate='%{text}<extra></extra>',
+                name='CoC 变化分析'
+            ))
+            
+            fig.update_layout(
+                mapbox=dict(
+                    style="carto-positron",  # 使用更稳定的地图样式
+                    center=dict(lat=39.8283, lon=-98.5795),
+                    zoom=3.5
+                ),
+                height=700,
+                margin=dict(l=0, r=0, t=50, b=0),
+                showlegend=False,
+                title=dict(
+                    text=f"Bed vs Unsheltered Changes - Bivariate Map ({previous_year}→{selected_year})",
+                    x=0.5,
+                    y=0.98,
+                    xanchor='center',
+                    yanchor='top',
+                    font=dict(size=18, color='#1f4e79')
+                )
+            )
+            
+            # 显示地图，添加错误处理
+            try:
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as plot_error:
+                st.warning(f"Map rendering issue, trying simplified display: {str(plot_error)}")
+                # Create simplified scatter plot as backup
+                simple_fig = go.Figure()
+                simple_fig.add_trace(go.Scatter(
+                    x=lons,
+                    y=lats,
+                    mode='markers',
+                    marker=dict(
+                        size=8,
+                        color=change_data['Color'],
+                        opacity=0.8
+                    ),
+                    text=hover_text,
+                    hovertemplate='%{text}<extra></extra>',
+                    name='CoC 变化分析'
+                ))
+                simple_fig.update_layout(
+                    title=f"Bed vs Unsheltered Change Analysis ({previous_year}→{selected_year})",
+                    xaxis_title="Longitude",
+                    yaxis_title="Latitude",
+                    height=500
+                )
+                st.plotly_chart(simple_fig, use_container_width=True)
+            
+            # 创建图例和统计信息
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                st.subheader("🎨 Color Legend")
+                
+                st.write("**Bed Change Categories:**")
+                st.write("- B1: Bed decrease (<0%)")
+                st.write("- B2: Bed low/moderate growth (0-50%)")
+                st.write("- B3: Bed high growth (≥50%)")
+                
+                st.write("**Unsheltered Change Categories:**")
+                st.write("- U1: Unsheltered increase (>0%)")
+                st.write("- U2: Unsheltered slight decrease (-50% to 0%)")
+                st.write("- U3: Unsheltered significant decrease (≤-50%)")
+                
+                st.write("**Color Meanings:**")
+                color_meanings = [
+                    ("🟣 Purple (B1-U1)", "Bed decrease, unsheltered increase"),
+                    ("🔵 Light Blue (B1-U2)", "Bed decrease, unsheltered slight decrease"),
+                    ("🔵 Blue (B1-U3)", "Bed decrease, unsheltered significant decrease"),
+                    ("🔴 Red (B2-U1)", "Bed moderate growth, unsheltered increase"),
+                    ("⚪ Gray (B2-U2)", "Bed moderate growth, unsheltered slight decrease (stable)"),
+                    ("🟢 Green (B2-U3)", "Bed moderate growth, unsheltered significant decrease"),
+                    ("🔴 Dark Red (B3-U1)", "Bed high growth, unsheltered increase (warning)"),
+                    ("🟢 Light Green (B3-U2)", "Bed high growth, unsheltered slight decrease"),
+                    ("🟢 Dark Green (B3-U3)", "Bed high growth, unsheltered significant decrease (ideal)")
+                ]
+                
+                for color_desc, meaning in color_meanings:
+                    st.write(f"- {color_desc}: {meaning}")
+            
+            with col2:
+                st.subheader("📈 Change Statistics")
+                
+                # Add timestamp to verify data refresh
+                from datetime import datetime
+                import random
+                current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                analysis_id = random.randint(1000, 9999)
+                st.write(f"🕐 **Analysis Time:** {current_time}")
+                st.write(f"📋 **Analysis ID:** BIV-{analysis_id}")
+                
+                # Count statistics for each category
+                class_counts = change_data['Bivariate_Class'].value_counts()
+                total_cocs = len(change_data)
+                
+                st.write(f"**Total CoC Count:** {total_cocs}")
+                st.write("**Category Distribution:**")
+                
+                for bivariate_class in ['B1-U1', 'B1-U2', 'B1-U3', 'B2-U1', 'B2-U2', 'B2-U3', 'B3-U1', 'B3-U2', 'B3-U3']:
+                    count = class_counts.get(bivariate_class, 0)
+                    percentage = (count / total_cocs) * 100 if total_cocs > 0 else 0
+                    color_hex = bivariate_colors[bivariate_class]
+                    st.write(f"<span style='color: {color_hex}; font-weight: bold;'>●</span> {bivariate_class}: {count} ({percentage:.1f}%)", 
+                            unsafe_allow_html=True)
+                
+                # Show average changes
+                avg_beds_change = change_data['Beds_Change_Pct'].mean()
+                avg_unsheltered_change = change_data['Unsheltered_Change_Pct'].mean()
+                
+                st.write(f"**Average Bed Change:** {avg_beds_change:+.1f}%")
+                st.write(f"**Average Unsheltered Change:** {avg_unsheltered_change:+.1f}%")
+                
+                # Show best and concerning performing CoCs
+                st.write("**Best Performance (B3-U3):**")
+                best_cocs = change_data[change_data['Bivariate_Class'] == 'B3-U3']
+                if len(best_cocs) > 0:
+                    for _, coc in best_cocs.head(3).iterrows():
+                        st.write(f"- {coc['CoC Number']} ({coc['State']})")
+                else:
+                    st.write("None")
+                
+                st.write("**Needs Attention (B1-U1, B3-U1):**")
+                concern_cocs = change_data[change_data['Bivariate_Class'].isin(['B1-U1', 'B3-U1'])]
+                if len(concern_cocs) > 0:
+                    for _, coc in concern_cocs.head(3).iterrows():
+                        st.write(f"- {coc['CoC Number']} ({coc['State']}) - {coc['Bivariate_Class']}")
+                else:
+                    st.write("None")
+            
+            return fig
+            
+        except Exception as e:
+            st.error(f"Error creating bivariate change map: {str(e)}")
+            return None
+
+    def create_bed_capacity_analysis(self, gdf_filtered):
+        """Create bed capacity analysis chart"""
+        try:
+            # Prepare bed data
+            bed_columns = ['Total Year-Round Beds (ES)', 'Total Year-Round Beds (TH)', 'Total Year-Round Beds (SH)']
+            available_bed_cols = [col for col in bed_columns if col in gdf_filtered.columns]
+            
+            if not available_bed_cols:
+                fig = go.Figure()
+                fig.add_annotation(
+                    text="Bed data not available",
+                    xref="paper", yref="paper",
+                    x=0.5, y=0.5, showarrow=False,
+                    font=dict(size=16, color="gray")
+                )
+                fig.update_layout(
+                    title="Bed Capacity Analysis",
+                    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    paper_bgcolor='rgba(0,0,0,0)'
+                )
+                return fig
+            
+            # Calculate total beds by state
+            state_bed_data = []
+            
+            for state in gdf_filtered['State'].unique():
+                state_data = gdf_filtered[gdf_filtered['State'] == state]
+                
+                bed_totals = {}
+                for col in available_bed_cols:
+                    bed_totals[col] = pd.to_numeric(state_data[col], errors='coerce').sum()
+                
+                # Add total homeless count for comparison
+                if 'Overall Homeless' in state_data.columns:
+                    homeless_total = pd.to_numeric(state_data['Overall Homeless'], errors='coerce').sum()
+                    bed_totals['Overall Homeless'] = homeless_total
+                
+                bed_totals['State'] = state
+                state_bed_data.append(bed_totals)
+            
+            df_beds = pd.DataFrame(state_bed_data)
+            
+            # Sort data
+            if 'Total Year-Round Beds (ES, TH, SH)' in gdf_filtered.columns:
+                sort_col = 'Total Year-Round Beds (ES, TH, SH)'
+                df_beds['Total Beds'] = pd.to_numeric(gdf_filtered.groupby('State')['Total Year-Round Beds (ES, TH, SH)'].sum(), errors='coerce')
+                df_beds = df_beds.sort_values('Total Beds', ascending=True)
+            else:
+                # If no total beds, sort by ES beds
+                if 'Total Year-Round Beds (ES)' in df_beds.columns:
+                    df_beds = df_beds.sort_values('Total Year-Round Beds (ES)', ascending=True)
+            
+            # Show only top 15 states to avoid overcrowded chart
+            df_beds = df_beds.tail(15)
+            
+            # Create stacked horizontal bar chart
+            fig = go.Figure()
+            
+            colors = {
+                'Total Year-Round Beds (ES)': '#FF6B6B',    # Red - Emergency Shelter
+                'Total Year-Round Beds (TH)': '#4ECDC4',    # Cyan - Transitional Housing  
+                'Total Year-Round Beds (SH)': '#45B7D1',    # Blue - Safe Haven
+            }
+            
+            bed_labels = {
+                'Total Year-Round Beds (ES)': 'Emergency Shelter (ES)',
+                'Total Year-Round Beds (TH)': 'Transitional Housing (TH)',
+                'Total Year-Round Beds (SH)': 'Safe Haven (SH)'
+            }
+            
+            for col in available_bed_cols:
+                if col in df_beds.columns:
+                    fig.add_trace(go.Bar(
+                        name=bed_labels.get(col, col),
+                        y=df_beds['State'],
+                        x=df_beds[col],
+                        orientation='h',
+                        marker_color=colors.get(col, '#95A5A6'),
+                        text=[f'{val:,.0f}' if val > 0 else '' for val in df_beds[col]],
+                        textposition='inside',
+                        textfont=dict(color='white', size=10)
+                    ))
+            
+            # Add total homeless count as reference line (if available)
+            if 'Overall Homeless' in df_beds.columns:
+                fig.add_trace(go.Scatter(
+                    x=df_beds['Overall Homeless'],
+                    y=df_beds['State'],
+                    mode='markers',
+                    name='Total Homeless',
+                    marker=dict(
+                        symbol='diamond',
+                        size=8,
+                        color='orange',
+                        line=dict(width=2, color='darkorange')
+                    ),
+                    text=[f'Homeless: {val:,.0f}' for val in df_beds['Overall Homeless']],
+                    hovertemplate='%{text}<extra></extra>'
+                ))
+            
+            fig.update_layout(
+                title=dict(
+                    text="State Bed Capacity Comparison Analysis (Top 15)",
+                    x=0.5,
+                    xanchor='center',
+                    font=dict(size=16)
+                ),
+                xaxis_title="Number of Beds",
+                yaxis_title="State",
+                barmode='stack',
+                height=500,
+                plot_bgcolor='white',
+                paper_bgcolor='white',
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="center",
+                    x=0.5
+                ),
+                margin=dict(l=80, r=50, t=80, b=50)
+            )
+            
+            return fig
+            
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(
+                text=f"Bed analysis error: {str(e)[:50]}...",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False,
+                font=dict(size=14, color="red")
+            )
+            fig.update_layout(
+                title="Bed Capacity Analysis",
+                xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)'
+            )
+            return fig
     
     def create_sidebar_timeline_controls(self, years):
         """Create timeline controls in sidebar with interactive slider functionality"""
@@ -740,6 +1175,10 @@ class EnhancedCoCVisualizer:
         
         # Get available years
         years = sorted(self.gdf['Year'].unique())
+        
+        # Initialize session state to latest year (2024) if not properly set or first time
+        if st.session_state.current_year_index >= len(years) or st.session_state.current_year_index < 0:
+            st.session_state.current_year_index = len(years) - 1  # Set to latest year (2024)
         
         # Timeline controls in sidebar
         selected_year = self.create_sidebar_timeline_controls(years)
@@ -845,6 +1284,24 @@ class EnhancedCoCVisualizer:
             st.plotly_chart(comparison_fig, use_container_width=True)
         
         st.markdown("---")
+        
+        # Add bed capacity analysis if bed data is available
+        if any(col.startswith('Total Year-Round Beds') for col in gdf_filtered.columns):
+            st.markdown("""
+                            <h3 style='text-align: center; color: #1f4e79; margin: 1rem 0;'>🛏️ Bed Capacity Analysis</h3>
+            """, unsafe_allow_html=True)
+            bed_fig = self.create_bed_capacity_analysis(gdf_filtered)
+            st.plotly_chart(bed_fig, use_container_width=True)
+            st.markdown("---")
+            
+            # Add bivariate change map 
+            if selected_year > 2007:
+                st.markdown("""
+                <h3 style='text-align: center; color: #1f4e79; margin: 1rem 0;'>🔄 Annual Change Analysis Map</h3>
+                """, unsafe_allow_html=True)
+                bivariate_fig = self.create_bivariate_change_map(self.gdf, selected_year)
+                if bivariate_fig:
+                    st.markdown("---")
         
         # Trend analysis and correlation analysis
         col3, col4 = st.columns(2)
