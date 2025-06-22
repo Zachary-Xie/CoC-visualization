@@ -9,19 +9,19 @@ from typing import Dict, List, Tuple
 import warnings
 warnings.filterwarnings('ignore')
 
-# Streamlit版本兼容性处理
+# Streamlit version compatibility handling
 def safe_rerun():
-    """安全的重新运行函数，兼容不同版本的Streamlit"""
+    """Safe rerun function, compatible with different versions of Streamlit"""
     try:
         if hasattr(st, 'rerun'):
             st.rerun()
         elif hasattr(st, 'experimental_rerun'):
             st.experimental_rerun()
         else:
-            # 对于非常旧的版本，使用session state变化来触发重新运行
+            # For very old versions, use session state changes to trigger rerun
             st.session_state._rerun_trigger = not st.session_state.get('_rerun_trigger', False)
     except Exception:
-        # 如果所有方法都失败，静默处理
+        # If all methods fail, handle silently
         pass
 
 # Page configuration
@@ -70,19 +70,19 @@ st.markdown("""
         position: relative;
         margin-top: 10px;
     }
-    /* 优化侧边栏按钮在窄宽度下的显示 */
+    /* Optimize sidebar button display in narrow width */
     .sidebar .element-container button {
         font-size: 0.85rem !important;
         padding: 0.25rem 0.5rem !important;
         width: 100% !important;
         text-align: center !important;
     }
-    /* 优化滑块标签显示 */
+    /* Optimize slider label display */
     .sidebar .stSlider > label {
         font-size: 0.9rem !important;
         margin-bottom: 0.5rem !important;
     }
-    /* 优化数字输入框 */
+    /* Optimize number input box */
     .sidebar .stNumberInput > label {
         font-size: 0.9rem !important;
         margin-bottom: 0.5rem !important;
@@ -655,158 +655,291 @@ class EnhancedCoCVisualizer:
         
         return fig
 
-    def create_bivariate_change_map(self, _gdf, selected_year):
-        """Create bivariate choropleth map: Bed capacity vs Unsheltered homeless changes (current year vs previous year)"""
+    def create_shelter_homeless_correlation_map(self, _gdf, selected_year):
+        """Create correlation map between shelter facility number and homeless number"""
         try:
-            if selected_year <= 2007:
-                st.subheader("📊 Bivariate Change Analysis Map")
-                st.info("🔔 **Note**: 2007 is the baseline year with no previous year data for comparison.")
+            import numpy as np  # Import numpy at function start
+            import pandas as pd  # Import pandas at function start
+            st.subheader(f"📊 Shelter Facility & Homeless Correlation Analysis ({selected_year})")
+            st.info(f"🔔 **Analysis Description**: Shows the correlation between total shelter bed capacity and homeless population for {selected_year}.")
+            st.write("Analyzes the relationship between shelter facility capacity and homeless numbers by CoC area")
+            
+
+            
+            # Step 1: Get current year data and calculate correlation metrics
+            st.write(f"Analyzing correlation data for {selected_year}...")
+            
+            # Get current year data
+            current_data = _gdf[_gdf['Year'] == selected_year].copy()
+            
+            if len(current_data) == 0:
+                st.warning(f"No data found for {selected_year}")
                 return None
             
-            previous_year = selected_year - 1
-            st.subheader(f"📊 Bivariate Change Analysis Map ({previous_year} → {selected_year})")
-            st.info(f"🔔 **Analysis Description**: This analysis shows the change trends of {selected_year} relative to {previous_year}.")
-            st.write("Shows the relationship between bed capacity changes and unsheltered homeless population changes")
+            # Prepare correlation analysis data
+            correlation_data = current_data[['CoC Number', 'CoC Name', 'State', 'geometry']].copy()
             
-            # Step 1: Calculate percentage change indicators
-            st.write(f"Calculating change indicators from {previous_year} to {selected_year}...")
+            # Add bed data
+            if 'Total Year-Round Beds (ES, TH, SH)' in current_data.columns:
+                correlation_data['Total_Beds'] = pd.to_numeric(current_data['Total Year-Round Beds (ES, TH, SH)'], errors='coerce').fillna(0)
+            else:
+                correlation_data['Total_Beds'] = 0
             
-            # 获取前一年和当前年数据
-            data_previous = _gdf[_gdf['Year'] == previous_year].copy()
-            data_current = _gdf[_gdf['Year'] == selected_year].copy()
+            # Add homeless population data
+            if 'Overall Homeless' in current_data.columns:
+                correlation_data['Total_Homeless'] = pd.to_numeric(current_data['Overall Homeless'], errors='coerce').fillna(0)
+            else:
+                correlation_data['Total_Homeless'] = 0
+                
+            # Add sheltered homeless data
+            if 'Sheltered Total Homeless' in current_data.columns:
+                correlation_data['Sheltered_Homeless'] = pd.to_numeric(current_data['Sheltered Total Homeless'], errors='coerce').fillna(0)
+            else:
+                correlation_data['Sheltered_Homeless'] = 0
+                
+            # Add unsheltered homeless data
+            if 'Unsheltered Homeless' in current_data.columns:
+                correlation_data['Unsheltered_Homeless'] = pd.to_numeric(current_data['Unsheltered Homeless'], errors='coerce').fillna(0)
+            else:
+                correlation_data['Unsheltered_Homeless'] = 0
             
-            if len(data_previous) == 0 or len(data_current) == 0:
-                st.warning(f"Missing data for {previous_year} or {selected_year}, cannot perform change analysis")
-                return None
-            
-            # 合并数据以计算变化
-            change_data = data_previous[['CoC Number', 'CoC Name', 'State', 'geometry', 
-                                       'Total Year-Round Beds (ES, TH, SH)', 'Unsheltered Homeless']].merge(
-                data_current[['CoC Number', 'Total Year-Round Beds (ES, TH, SH)', 'Unsheltered Homeless']], 
-                on='CoC Number', suffixes=(f'_{previous_year}', f'_{selected_year}'), how='inner'
+            # Calculate bed utilization rate (if possible)
+            correlation_data['Bed_Utilization_Rate'] = np.where(
+                correlation_data['Total_Beds'] > 0,
+                (correlation_data['Sheltered_Homeless'] / correlation_data['Total_Beds']) * 100,
+                0
             )
             
-            if len(change_data) == 0:
-                st.warning(f"No CoC data found that exists in both {previous_year} and {selected_year}")
-                return None
+            # Calculate bed gap
+            correlation_data['Bed_Gap'] = correlation_data['Total_Homeless'] - correlation_data['Total_Beds']
             
-            # 计算百分比变化，处理除零错误
-            def safe_percentage_change(new_val, old_val, max_cap=999):
-                if pd.isna(old_val) or pd.isna(new_val):
-                    return np.nan
-                if old_val == 0:
-                    return max_cap if new_val > 0 else 0
-                return ((new_val - old_val) / old_val) * 100
+            # Remove invalid data
+            correlation_data = correlation_data.dropna(subset=['Total_Beds', 'Total_Homeless'])
             
-            change_data['Beds_Change_Pct'] = change_data.apply(
-                lambda row: safe_percentage_change(
-                    row[f'Total Year-Round Beds (ES, TH, SH)_{selected_year}'], 
-                    row[f'Total Year-Round Beds (ES, TH, SH)_{previous_year}']
-                ), axis=1
+            # Step 2: Calculate adaptive classification thresholds (without displaying)
+            # Calculate percentiles for adaptive thresholds
+            beds_percentiles = correlation_data['Total_Beds'].quantile([0.25, 0.5, 0.75]).tolist()
+            homeless_percentiles = correlation_data['Total_Homeless'].quantile([0.25, 0.5, 0.75]).tolist()
+            
+            def classify_beds_capacity(beds):
+                if beds == 0:
+                    return 'B0'  # No beds
+                elif beds <= beds_percentiles[0]:  # Bottom 25%
+                    return 'B1'  # Low capacity
+                elif beds <= beds_percentiles[2]:  # 25%-75%
+                    return 'B2'  # Medium capacity
+                else:  # Top 25%
+                    return 'B3'  # High capacity
+            
+            def classify_homeless_population(homeless):
+                if homeless == 0:
+                    return 'H0'  # No homeless
+                elif homeless <= homeless_percentiles[0]:  # Bottom 25%
+                    return 'H1'  # Low population
+                elif homeless <= homeless_percentiles[2]:  # 25%-75%
+                    return 'H2'  # Medium population
+                else:  # Top 25%
+                    return 'H3'  # High population
+            
+            correlation_data['Beds_Class'] = correlation_data['Total_Beds'].apply(classify_beds_capacity)
+            correlation_data['Homeless_Class'] = correlation_data['Total_Homeless'].apply(classify_homeless_population)
+            correlation_data['Correlation_Class'] = correlation_data['Beds_Class'] + '-' + correlation_data['Homeless_Class']
+            
+            # Step 3: Create improved classification based on bed gap ratio
+            correlation_data['Bed_Gap_Percentage'] = np.where(
+                correlation_data['Total_Homeless'] > 0,
+                (correlation_data['Bed_Gap'] / correlation_data['Total_Homeless']) * 100,
+                0
             )
             
-            change_data['Unsheltered_Change_Pct'] = change_data.apply(
-                lambda row: safe_percentage_change(
-                    row[f'Unsheltered Homeless_{selected_year}'], 
-                    row[f'Unsheltered Homeless_{previous_year}']
-                ), axis=1
+            # Calculate adaptive thresholds for bed gap ratio
+            gap_percentiles = correlation_data['Bed_Gap_Percentage'].quantile([0.2, 0.4, 0.6, 0.8]).tolist()
+            
+            def classify_need_level(gap_percentage, total_homeless):
+                if total_homeless == 0:
+                    return 'NO_DATA'  # No homeless population
+                elif gap_percentage <= gap_percentiles[0]:  # Bottom 20% - best situations
+                    return 'EXCELLENT'  # Bed surplus or minimal gap
+                elif gap_percentage <= gap_percentiles[1]:  # 20%-40%
+                    return 'GOOD'  # Manageable gap
+                elif gap_percentage <= gap_percentiles[2]:  # 40%-60%
+                    return 'MODERATE'  # Moderate shortage
+                elif gap_percentage <= gap_percentiles[3]:  # 60%-80%
+                    return 'HIGH'  # High need
+                else:  # Top 20% - worst situations
+                    return 'CRITICAL'  # Critical shortage
+            
+            correlation_data['Need_Level'] = correlation_data.apply(
+                lambda row: classify_need_level(row['Bed_Gap_Percentage'], row['Total_Homeless']), axis=1
             )
             
-            # 移除无效数据
-            change_data = change_data.dropna(subset=['Beds_Change_Pct', 'Unsheltered_Change_Pct'])
-            
-            # 步骤2: 创建分级分类
-            def classify_beds_change(pct):
-                if pct < 0:
-                    return 'B1'  # 减少
-                elif pct < 50:
-                    return 'B2'  # 低/中度增长
-                else:
-                    return 'B3'  # 高增长
-            
-            def classify_unsheltered_change(pct):
-                if pct > 0:
-                    return 'U1'  # 增加
-                elif pct > -50:
-                    return 'U2'  # 轻微减少
-                else:
-                    return 'U3'  # 显著减少
-            
-            change_data['Beds_Class'] = change_data['Beds_Change_Pct'].apply(classify_beds_change)
-            change_data['Unsheltered_Class'] = change_data['Unsheltered_Change_Pct'].apply(classify_unsheltered_change)
-            change_data['Bivariate_Class'] = change_data['Beds_Class'] + '-' + change_data['Unsheltered_Class']
-            
-            # 步骤3: 定义颜色方案
-            bivariate_colors = {
-                'B1-U1': '#8e6d8a',  # 床位减少，无庇护者增加 - 紫色
-                'B1-U2': '#a6bddb',  # 床位减少，无庇护者轻微减少 - 浅蓝
-                'B1-U3': '#2b8cbe',  # 床位减少，无庇护者显著减少 - 蓝色
-                'B2-U1': '#c85a5a',  # 床位低/中增长，无庇护者增加 - 红色
-                'B2-U2': '#e0e0e0',  # 床位低/中增长，无庇护者轻微减少 - 灰色（稳定）
-                'B2-U3': '#74c476',  # 床位低/中增长，无庇护者显著减少 - 绿色
-                'B3-U1': '#ad3a3a',  # 床位高增长，无庇护者增加 - 深红（警示）
-                'B3-U2': '#a1d99b',  # 床位高增长，无庇护者轻微减少 - 浅绿
-                'B3-U3': '#31a354',  # 床位高增长，无庇护者显著减少 - 深绿（理想）
+            # Define improved color scheme based on need levels
+            need_colors = {
+                'NO_DATA': '#f0f0f0',      # Light gray - No data
+                'EXCELLENT': '#006d2c',    # Dark green - Surplus/minimal gap  
+                'GOOD': '#31a354',         # Green - Good situation
+                'MODERATE': '#fdcc8a',     # Light orange - Moderate need
+                'HIGH': '#fc8d59',         # Orange - High need
+                'CRITICAL': '#d94701'      # Dark red - Critical need
             }
             
-            # 添加颜色到数据
-            change_data['Color'] = change_data['Bivariate_Class'].map(bivariate_colors)
+            # Add colors to data
+            correlation_data['Color'] = correlation_data['Need_Level'].map(need_colors)
             
-            # 创建地图
+            # Create map
             try:
-                centroids = change_data.geometry.centroid
+                centroids = correlation_data.geometry.centroid
                 lats = [point.y if hasattr(point, 'y') else 39.8283 for point in centroids]
                 lons = [point.x if hasattr(point, 'x') else -98.5795 for point in centroids]
             except Exception as e:
-                st.warning(f"几何数据处理错误: {str(e)}")
-                lats = [39.8283] * len(change_data)
-                lons = [-98.5795] * len(change_data)
+                st.warning(f"Geometric data processing error: {str(e)}")
+                lats = [39.8283] * len(correlation_data)
+                lons = [-98.5795] * len(correlation_data)
             
-            # 创建悬停文本
+            # Create simplified hover text
             hover_text = []
-            for _, row in change_data.iterrows():
+            for _, row in correlation_data.iterrows():
+                # Create concise hover display focusing on key information
                 text = f"<b>{row['CoC Name']}</b><br>"
-                text += f"CoC Number: {row['CoC Number']}<br>"
-                text += f"State: {row['State']}<br><br>"
-                text += f"<b>Bed Changes ({previous_year}-{selected_year}):</b><br>"
-                text += f"{previous_year}: {row[f'Total Year-Round Beds (ES, TH, SH)_{previous_year}']:,.0f}<br>"
-                text += f"{selected_year}: {row[f'Total Year-Round Beds (ES, TH, SH)_{selected_year}']:,.0f}<br>"
-                text += f"Change: {row['Beds_Change_Pct']:+.1f}%<br><br>"
-                text += f"<b>Unsheltered Changes ({previous_year}-{selected_year}):</b><br>"
-                text += f"{previous_year}: {row[f'Unsheltered Homeless_{previous_year}']:,.0f}<br>"
-                text += f"{selected_year}: {row[f'Unsheltered Homeless_{selected_year}']:,.0f}<br>"
-                text += f"Change: {row['Unsheltered_Change_Pct']:+.1f}%<br><br>"
-                text += f"<b>Category:</b> {row['Bivariate_Class']}"
+                text += f"<b>State:</b> {row['State']}<br>"
+                text += f"<b>Total Beds:</b> {row['Total_Beds']:,.0f}<br>"
+                text += f"<b>Homeless Population:</b> {row['Total_Homeless']:,.0f}<br>"
+                
+                # Show bed status
+                if row['Bed_Gap'] >= 0:
+                    bed_status = f"Shortage of {row['Bed_Gap']:,.0f} beds"
+                else:
+                    bed_status = f"Surplus of {abs(row['Bed_Gap']):,.0f} beds"
+                text += f"<b>Bed Status:</b> {bed_status}<br>"
+                
+                # Show gap percentage
+                text += f"<b>Gap Ratio:</b> {row['Bed_Gap_Percentage']:+.1f}%<br>"
+                
+                # Show need level with color
+                need_level_display = {
+                    'NO_DATA': '⚪ No Data',
+                    'EXCELLENT': '🟢 Excellent',
+                    'GOOD': '🟢 Good',
+                    'MODERATE': '🟡 Moderate Need',
+                    'HIGH': '🟠 High Need',
+                    'CRITICAL': '🔴 Critical Need'
+                }
+                text += f"<b>Need Level:</b> {need_level_display.get(row['Need_Level'], row['Need_Level'])}"
+                
                 hover_text.append(text)
             
-            # 创建图表
+            # Create chart showing individual data points
             fig = go.Figure()
             
+            # Add all individual CoC data points
             fig.add_trace(go.Scattermapbox(
                 lat=lats,
                 lon=lons,
                 mode='markers',
                 marker=dict(
-                    size=10,
-                    color=change_data['Color'],
-                    opacity=0.8
+                    size=8,
+                    color=correlation_data['Color'],
+                    opacity=0.8,
+                    symbol='circle'
                 ),
                 text=hover_text,
                 hovertemplate='%{text}<extra></extra>',
-                name='CoC 变化分析'
+                name='CoC Areas',
+                showlegend=False
+            ))
+            
+
+            
+            # Perform clustering analysis for statistics (but don't show cluster circles)
+            try:
+                from sklearn.cluster import KMeans
+                from sklearn.preprocessing import StandardScaler
+                import numpy as np
+                
+                # Calculate additional metrics for clustering
+                correlation_data['Bed_Gap_Ratio'] = np.where(
+                    correlation_data['Total_Homeless'] > 0,
+                    correlation_data['Bed_Gap'] / correlation_data['Total_Homeless'],
+                    0
+                )
+                
+                correlation_data['Need_Pressure'] = np.where(
+                    correlation_data['Total_Beds'] > 0,
+                    correlation_data['Total_Homeless'] / correlation_data['Total_Beds'],
+                    10
+                )
+                
+                # Create comprehensive need score based on new classification
+                need_level_scores = {
+                    'NO_DATA': 0, 'EXCELLENT': 1, 'GOOD': 2, 
+                    'MODERATE': 3, 'HIGH': 4, 'CRITICAL': 5
+                }
+                
+                correlation_data['Color_Need_Score'] = correlation_data['Need_Level'].map(need_level_scores).fillna(0)
+                
+                # Perform clustering analysis
+                cluster_features = np.column_stack([
+                    correlation_data['Color_Need_Score'].values,
+                    correlation_data['Bed_Utilization_Rate'].values,
+                    correlation_data['Bed_Gap_Ratio'].values
+                ])
+                
+                if len(cluster_features) >= 3:
+                    scaler = StandardScaler()
+                    scaled_features = scaler.fit_transform(cluster_features)
+                    
+                    kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
+                    cluster_labels = kmeans.fit_predict(scaled_features)
+                    correlation_data['Cluster'] = cluster_labels
+                    
+                    # Map clusters to need levels
+                    cluster_stats = []
+                    for i in range(3):
+                        cluster_data = correlation_data[correlation_data['Cluster'] == i]
+                        if len(cluster_data) > 0:
+                            avg_need_score = cluster_data['Color_Need_Score'].mean()
+                            cluster_stats.append((i, avg_need_score, len(cluster_data)))
+                    
+                    cluster_stats.sort(key=lambda x: x[1], reverse=True)
+                    cluster_mapping = {original_id: rank for rank, (original_id, _, _) in enumerate(cluster_stats)}
+                    correlation_data['Need_Level'] = correlation_data['Cluster'].map(cluster_mapping)
+                    
+                    cluster_success = True
+                else:
+                    cluster_success = False
+                    
+            except Exception:
+                cluster_success = False
+            
+            # Add original individual data points
+            fig.add_trace(go.Scattermapbox(
+                lat=lats,
+                lon=lons,
+                mode='markers',
+                marker=dict(
+                    size=8,
+                    color=correlation_data['Color'],
+                    opacity=0.8,
+                    symbol='circle'
+                ),
+                text=hover_text,
+                hovertemplate='%{text}<extra></extra>',
+                name='CoC Areas',
+                showlegend=False
             ))
             
             fig.update_layout(
                 mapbox=dict(
-                    style="carto-positron",  # 使用更稳定的地图样式
+                    style="carto-positron",  # More stable style
                     center=dict(lat=39.8283, lon=-98.5795),
-                    zoom=3.5
+                    zoom=3.5,
+                    accesstoken=None  # Use free version to avoid token issues
                 ),
                 height=700,
                 margin=dict(l=0, r=0, t=50, b=0),
                 showlegend=False,
                 title=dict(
-                    text=f"Bed vs Unsheltered Changes - Bivariate Map ({previous_year}→{selected_year})",
+                    text=f"Shelter Capacity vs Homeless Population Analysis ({selected_year})",
                     x=0.5,
                     y=0.98,
                     xanchor='center',
@@ -815,11 +948,53 @@ class EnhancedCoCVisualizer:
                 )
             )
             
-            # 显示地图，添加错误处理
+            # Add comprehensive classification explanation
+            with st.expander("📊 Adaptive Classification System Details", expanded=False):
+                st.markdown("""
+                ### 🎯 Bed Gap Ratio-Based Adaptive Classification:
+                
+                **Classification Method**: Bed Gap Ratio = (Homeless Population - Bed Capacity) / Homeless Population × 100%
+                
+                **Adaptive Thresholds** (Based on current year data distribution quintiles):
+                """)
+                
+                st.write(f"- **🟢 Excellent**: Gap ratio ≤ {gap_percentiles[0]:.1f}% (Top 20% best situations)")
+                st.write(f"- **🟢 Good**: Gap ratio {gap_percentiles[0]:.1f}% - {gap_percentiles[1]:.1f}% (20%-40%)")
+                st.write(f"- **🟡 Moderate**: Gap ratio {gap_percentiles[1]:.1f}% - {gap_percentiles[2]:.1f}% (40%-60%)")
+                st.write(f"- **🟠 High Need**: Gap ratio {gap_percentiles[2]:.1f}% - {gap_percentiles[3]:.1f}% (60%-80%)")
+                st.write(f"- **🔴 Critical**: Gap ratio > {gap_percentiles[3]:.1f}% (Bottom 20% worst situations)")
+                st.write(f"- **⚪ No Data**: No homeless population")
+                
+                # Show current distribution
+                level_counts = correlation_data['Need_Level'].value_counts()
+                st.markdown("### 📊 Current Distribution Statistics:")
+                for level in ['EXCELLENT', 'GOOD', 'MODERATE', 'HIGH', 'CRITICAL', 'NO_DATA']:
+                    count = level_counts.get(level, 0)
+                    percentage = (count / len(correlation_data)) * 100 if len(correlation_data) > 0 else 0
+                    color_icon = {'EXCELLENT': '🟢', 'GOOD': '🟢', 'MODERATE': '🟡', 'HIGH': '🟠', 'CRITICAL': '🔴', 'NO_DATA': '⚪'}[level]
+                    st.write(f"{color_icon} **{level}**: {count} areas ({percentage:.1f}%)")
+                
+                st.markdown("""
+                ### 📈 Classification Advantages:
+                - **Adaptive**: Thresholds based on actual data distribution, ensuring balanced category sizes
+                - **Relative Comparison**: Identifies relatively best and worst performing areas
+                - **Intuitive Understanding**: Gap ratio directly reflects urgency of bed shortage
+                - **Balanced Distribution**: Avoids concentration of all areas in single category
+                """)
+            
+            # Add simplified legend above the chart  
+            st.markdown(f"""
+            **📊 Map Legend (Adaptive Classification Based on {selected_year} Data):**  
+            **Each dot = One CoC area** (Original data, not cluster circles)  
+            🟢 Excellent/Good (≤{gap_percentiles[1]:.1f}% gap) | 🟡 Moderate Need | 🟠 High Need | 🔴 Critical | ⚪ No Data
+            """)
+            
+            # Display map with enhanced error handling
             try:
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
             except Exception as plot_error:
-                st.warning(f"Map rendering issue, trying simplified display: {str(plot_error)}")
+                st.warning(f"🗺️ 地图渲染遇到问题，切换到简化视图")
+                
                 # Create simplified scatter plot as backup
                 simple_fig = go.Figure()
                 simple_fig.add_trace(go.Scatter(
@@ -827,100 +1002,229 @@ class EnhancedCoCVisualizer:
                     y=lats,
                     mode='markers',
                     marker=dict(
-                        size=8,
-                        color=change_data['Color'],
-                        opacity=0.8
+                        size=10,
+                        color=correlation_data['Color'],
+                        opacity=0.8,
+                        line=dict(width=1, color='white')
                     ),
                     text=hover_text,
                     hovertemplate='%{text}<extra></extra>',
-                    name='CoC 变化分析'
+                    name='CoC Areas'
                 ))
                 simple_fig.update_layout(
-                    title=f"Bed vs Unsheltered Change Analysis ({previous_year}→{selected_year})",
-                    xaxis_title="Longitude",
-                    yaxis_title="Latitude",
-                    height=500
+                    title=f"Shelter Capacity vs Homeless Population Analysis ({selected_year}) - 简化视图",
+                    xaxis_title="经度 (Longitude)",
+                    yaxis_title="纬度 (Latitude)",
+                    height=500,
+                    plot_bgcolor='rgba(240,240,240,0.3)',
+                    showlegend=False
                 )
                 st.plotly_chart(simple_fig, use_container_width=True)
             
-            # 创建图例和统计信息
-            col1, col2 = st.columns([1, 1])
-            
-            with col1:
-                st.subheader("🎨 Color Legend")
+                            # Create legend and statistics (table format)
+                col1, col2 = st.columns([1, 1])
                 
-                st.write("**Bed Change Categories:**")
-                st.write("- B1: Bed decrease (<0%)")
-                st.write("- B2: Bed low/moderate growth (0-50%)")
-                st.write("- B3: Bed high growth (≥50%)")
+                with col1:
+                    st.subheader("🎨 Correlation Legend")
+                    
+                    # Map legend
+                    st.write("**🗺️ Map Legend:**")
+                    st.write("• **Individual CoCs**: Each point represents one CoC area")
+                    st.write("• **Point Color**: Based on bed capacity and homeless population combination")
+                    st.markdown("---")
+                    
+                    st.write("**Bed Capacity Categories:**")
+                    st.write("- B0: No beds (0)")
+                    st.write("- B1: Low capacity (1-500)")
+                    st.write("- B2: Medium capacity (501-2000)")
+                    st.write("- B3: High capacity (>2000)")
+                    
+                    st.write("**Homeless Population Categories:**")
+                    st.write("- H0: No homeless (0)")
+                    st.write("- H1: Low population (1-500)")
+                    st.write("- H2: Medium population (501-2000)")
+                    st.write("- H3: High population (>2000)")
+                    
+                    # Create comprehensive color legend table
+                    st.write("**Complete Color Legend:**")
+                    
+                    # Enhanced legend with need level analysis
+                    legend_table_data = []
+                    need_level_mapping = {
+                        ('B0', 'H1'): '🔴 Critical Need', ('B0', 'H2'): '🔴 Critical Need', ('B0', 'H3'): '🔴 Critical Need',
+                        ('B1', 'H2'): '🔴 High Need', ('B1', 'H3'): '🔴 High Need', ('B2', 'H3'): '🔴 High Need',
+                        ('B1', 'H1'): '🟠 Medium Need', ('B2', 'H2'): '🟠 Medium Need', ('B3', 'H3'): '🟠 Medium Need',
+                        ('B2', 'H1'): '🟢 Good Match', ('B3', 'H2'): '🟢 Good Match',
+                        ('B3', 'H1'): '🔵 Oversupply',
+                        ('B0', 'H0'): '⚪ No Data', ('B1', 'H0'): '⚪ No Data', ('B2', 'H0'): '⚪ No Data', ('B3', 'H0'): '⚪ No Data'
+                    }
+                    
+                    for category, color in correlation_colors.items():
+                        beds_class, homeless_class = category.split('-')
+                        beds_desc = {"B0": "No Beds (0)", "B1": "Low (1-500)", "B2": "Medium (501-2K)", "B3": "High (>2K)"}[beds_class]
+                        homeless_desc = {"H0": "None (0)", "H1": "Low (1-500)", "H2": "Medium (501-2K)", "H3": "High (>2K)"}[homeless_class]
+                        need_level = need_level_mapping.get((beds_class, homeless_class), '❓ Unknown')
+                        
+                        legend_table_data.append({
+                            "分类": category,
+                            "床位容量": beds_desc,
+                            "无家可归人口": homeless_desc,
+                            "需求等级": need_level,
+                            "颜色": f'<span style="color: {color}; font-size: 20px;">●</span>'
+                        })
+                    
+                    legend_df = pd.DataFrame(legend_table_data)
+                    st.markdown(legend_df.to_html(escape=False, index=False), unsafe_allow_html=True)
+                    
+                    # Add summary by need level
+                    st.write("**需求等级统计:**")
+                    class_counts = correlation_data['Correlation_Class'].value_counts()
+                    need_summary = {}
+                    for category, count in class_counts.items():
+                        beds_class, homeless_class = category.split('-')
+                        need_level = need_level_mapping.get((beds_class, homeless_class), '❓ Unknown')
+                        need_summary[need_level] = need_summary.get(need_level, 0) + count
+                    
+                    for need_level, count in sorted(need_summary.items()):
+                        st.write(f"• {need_level}: {count} 个CoC区域")
                 
-                st.write("**Unsheltered Change Categories:**")
-                st.write("- U1: Unsheltered increase (>0%)")
-                st.write("- U2: Unsheltered slight decrease (-50% to 0%)")
-                st.write("- U3: Unsheltered significant decrease (≤-50%)")
+                with col2:
+                    st.subheader("📊 Correlation Statistics")
+                    
+                    # Show clustering results if available
+                    if cluster_success and 'Need_Level' in correlation_data.columns:
+                        st.write("**🎯 Clustering Analysis Results:**")
+                        need_level_names = ['🔴 High Need Group', '🟠 Medium Need Group', '🟢 Low Need Group']
+                        for level in range(3):
+                            level_data = correlation_data[correlation_data['Need_Level'] == level]
+                            if len(level_data) > 0:
+                                avg_beds = level_data['Total_Beds'].mean()
+                                avg_homeless = level_data['Total_Homeless'].mean()
+                                avg_utilization = level_data['Bed_Utilization_Rate'].mean()
+                                st.write(f"• {need_level_names[level]}: {len(level_data)} areas")
+                                st.write(f"  - Avg beds: {avg_beds:.0f}, Avg homeless: {avg_homeless:.0f}")
+                                st.write(f"  - Avg utilization: {avg_utilization:.1f}%")
+                        st.markdown("---")
+                    
+                    # Add timestamp to verify data refresh
+                    from datetime import datetime
+                    import random
+                    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    analysis_id = random.randint(1000, 9999)
+                    st.write(f"🕐 **Analysis Time:** {current_time}")
+                    st.write(f"📋 **Analysis ID:** COR-{analysis_id}")
+                    
+                    # Count statistics for each need level
+                    need_counts = correlation_data['Need_Level'].value_counts()
+                    total_cocs = len(correlation_data)
+                    
+                    st.write(f"**Total CoC Count:** {total_cocs}")
+                    
+                    # Create statistics table for need levels
+                    stats_data = []
+                    for need_level in ['EXCELLENT', 'GOOD', 'MODERATE', 'HIGH', 'CRITICAL', 'NO_DATA']:
+                        count = need_counts.get(need_level, 0)
+                        percentage = (count / total_cocs) * 100 if total_cocs > 0 else 0
+                        color_hex = need_colors.get(need_level, '#000000')
+                        level_display = {
+                            'EXCELLENT': 'Excellent',
+                            'GOOD': 'Good', 
+                            'MODERATE': 'Moderate',
+                            'HIGH': 'High Need',
+                            'CRITICAL': 'Critical',
+                            'NO_DATA': 'No Data'
+                        }
+                        stats_data.append({
+                            "Need Level": level_display.get(need_level, need_level),
+                            "Count": count,
+                            "Percentage": f"{percentage:.1f}%",
+                            "Color": f'<span style="color: {color_hex}; font-size: 16px;">●</span>'
+                        })
+                    
+                    stats_df = pd.DataFrame(stats_data)
+                    stats_df = stats_df[stats_df['Count'] > 0]  # Only show categories with data
+                    st.markdown("**Need Level Distribution:**")
+                    st.markdown(stats_df.to_html(escape=False, index=False), unsafe_allow_html=True)
                 
-                st.write("**Color Meanings:**")
-                color_meanings = [
-                    ("🟣 Purple (B1-U1)", "Bed decrease, unsheltered increase"),
-                    ("🔵 Light Blue (B1-U2)", "Bed decrease, unsheltered slight decrease"),
-                    ("🔵 Blue (B1-U3)", "Bed decrease, unsheltered significant decrease"),
-                    ("🔴 Red (B2-U1)", "Bed moderate growth, unsheltered increase"),
-                    ("⚪ Gray (B2-U2)", "Bed moderate growth, unsheltered slight decrease (stable)"),
-                    ("🟢 Green (B2-U3)", "Bed moderate growth, unsheltered significant decrease"),
-                    ("🔴 Dark Red (B3-U1)", "Bed high growth, unsheltered increase (warning)"),
-                    ("🟢 Light Green (B3-U2)", "Bed high growth, unsheltered slight decrease"),
-                    ("🟢 Dark Green (B3-U3)", "Bed high growth, unsheltered significant decrease (ideal)")
-                ]
+                # Show correlation statistics
+                total_beds = correlation_data['Total_Beds'].sum()
+                total_homeless = correlation_data['Total_Homeless'].sum()
+                avg_utilization = correlation_data['Bed_Utilization_Rate'].mean()
+                total_gap = correlation_data['Bed_Gap'].sum()
                 
-                for color_desc, meaning in color_meanings:
-                    st.write(f"- {color_desc}: {meaning}")
-            
-            with col2:
-                st.subheader("📈 Change Statistics")
+                st.write("**Overall Statistics:**")
+                overall_stats = pd.DataFrame({
+                    "Metric": ["Total Beds", "Total Homeless", "Avg Utilization Rate", "Total Bed Gap"],
+                    "Value": [f"{total_beds:,.0f}", f"{total_homeless:,.0f}", f"{avg_utilization:.1f}%", f"{total_gap:+,.0f}"]
+                })
+                st.markdown(overall_stats.to_html(escape=False, index=False), unsafe_allow_html=True)
                 
-                # Add timestamp to verify data refresh
-                from datetime import datetime
-                import random
-                current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                analysis_id = random.randint(1000, 9999)
-                st.write(f"🕐 **Analysis Time:** {current_time}")
-                st.write(f"📋 **Analysis ID:** BIV-{analysis_id}")
-                
-                # Count statistics for each category
-                class_counts = change_data['Bivariate_Class'].value_counts()
-                total_cocs = len(change_data)
-                
-                st.write(f"**Total CoC Count:** {total_cocs}")
-                st.write("**Category Distribution:**")
-                
-                for bivariate_class in ['B1-U1', 'B1-U2', 'B1-U3', 'B2-U1', 'B2-U2', 'B2-U3', 'B3-U1', 'B3-U2', 'B3-U3']:
-                    count = class_counts.get(bivariate_class, 0)
-                    percentage = (count / total_cocs) * 100 if total_cocs > 0 else 0
-                    color_hex = bivariate_colors[bivariate_class]
-                    st.write(f"<span style='color: {color_hex}; font-weight: bold;'>●</span> {bivariate_class}: {count} ({percentage:.1f}%)", 
-                            unsafe_allow_html=True)
-                
-                # Show average changes
-                avg_beds_change = change_data['Beds_Change_Pct'].mean()
-                avg_unsheltered_change = change_data['Unsheltered_Change_Pct'].mean()
-                
-                st.write(f"**Average Bed Change:** {avg_beds_change:+.1f}%")
-                st.write(f"**Average Unsheltered Change:** {avg_unsheltered_change:+.1f}%")
+                # Show clustering results if available
+                if cluster_success and 'Cluster_Mapped' in correlation_data.columns:
+                    st.write("**🎯 Optimized Clustering Results Analysis:**")
+                    cluster_summary = correlation_data.groupby('Cluster_Mapped').agg({
+                        'CoC Number': 'count',
+                        'Total_Beds': 'mean',
+                        'Total_Homeless': 'mean',
+                        'Bed_Gap_Ratio': 'mean',
+                        'Need_Pressure': 'mean',
+                        'Bed_Utilization_Rate': 'mean',
+                        'Combined_Need_Score': 'mean',
+                        'Color_Need_Score': 'mean'
+                    })
+                    
+                    cluster_table_data = []
+                    # Dynamically obtain cluster labels (3 categories)
+                    available_clusters = sorted(correlation_data['Cluster_Mapped'].unique())
+                    priority_labels_short = ['🔴 High Need', '⚠️ Medium Need', '✅ Low Need']
+                    
+                    for cluster_id in available_clusters:
+                        if cluster_id in cluster_summary.index:
+                            row = cluster_summary.loc[cluster_id]
+                            label_idx = min(cluster_id, len(priority_labels_short)-1)
+                            cluster_table_data.append({
+                                "Need Level": priority_labels_short[label_idx],
+                                "CoC Count": int(row['CoC Number']),
+                                "Avg Beds": int(row['Total_Beds']),
+                                "Avg Homeless": int(row['Total_Homeless']),
+                                "Combined Score": f"{row['Combined_Need_Score']:.2f}",
+                                "Gap Ratio": f"{row['Bed_Gap_Ratio']:.2f}",
+                                "Pressure Index": f"{row['Need_Pressure']:.2f}",
+                                "Utilization %": f"{row['Bed_Utilization_Rate']:.1f}%"
+                            })
+                    
+                    cluster_df = pd.DataFrame(cluster_table_data)
+                    st.markdown(cluster_df.to_html(escape=False, index=False), unsafe_allow_html=True)
+                    
+                    # Add clustering algorithm quality report
+                    st.write("**📊 Spatial Clustering Algorithm Quality Report:**")
+                    quality_metrics = pd.DataFrame({
+                        "Metric": ["Cluster Count", "Silhouette Score", "Feature Count", "Standardization", "Spatial Features"],
+                        "Value": [f"{best_k} clusters", f"{final_silhouette:.3f}", "5 features (including geographic)", "✅ StandardScaler", "✅ Lat/Lon weighted (×2)"],
+                        "Assessment": [
+                            "Fixed (3-category system)",
+                            "Excellent" if final_silhouette > 0.7 else ("Good" if final_silhouette > 0.5 else "Needs improvement"),
+                            "Enhanced with spatial info",
+                            "Applied to all features",
+                            "Promotes spatial coherence"
+                        ]
+                    })
+                    st.markdown(quality_metrics.to_html(escape=False, index=False), unsafe_allow_html=True)
                 
                 # Show best and concerning performing CoCs
-                st.write("**Best Performance (B3-U3):**")
-                best_cocs = change_data[change_data['Bivariate_Class'] == 'B3-U3']
-                if len(best_cocs) > 0:
-                    for _, coc in best_cocs.head(3).iterrows():
-                        st.write(f"- {coc['CoC Number']} ({coc['State']})")
+                st.write("**🟢 Best Performing Areas (Excellent/Good):**")
+                good_match_cocs = correlation_data[correlation_data['Need_Level'].isin(['EXCELLENT', 'GOOD'])]
+                if len(good_match_cocs) > 0:
+                    for _, coc in good_match_cocs.head(3).iterrows():
+                        st.write(f"- {coc['CoC Number']} ({coc['State']}) - Gap: {coc['Bed_Gap_Percentage']:+.1f}%")
                 else:
                     st.write("None")
                 
-                st.write("**Needs Attention (B1-U1, B3-U1):**")
-                concern_cocs = change_data[change_data['Bivariate_Class'].isin(['B1-U1', 'B3-U1'])]
-                if len(concern_cocs) > 0:
-                    for _, coc in concern_cocs.head(3).iterrows():
-                        st.write(f"- {coc['CoC Number']} ({coc['State']}) - {coc['Bivariate_Class']}")
+                st.write("**🔴 Areas Needing Attention (High/Critical):**")
+                high_need_cocs = correlation_data[correlation_data['Need_Level'].isin(['HIGH', 'CRITICAL'])]
+                if len(high_need_cocs) > 0:
+                    for _, coc in high_need_cocs.head(3).iterrows():
+                        st.write(f"- {coc['CoC Number']} ({coc['State']}) - Gap: {coc['Bed_Gap_Percentage']:+.1f}%")
                 else:
                     st.write("None")
             
@@ -931,7 +1235,7 @@ class EnhancedCoCVisualizer:
             return None
 
     def create_bed_capacity_analysis(self, gdf_filtered):
-        """Create bed capacity analysis chart"""
+        """Create bed capacity analysis chart with sorting and expand functionality"""
         try:
             # Prepare bed data
             bed_columns = ['Total Year-Round Beds (ES)', 'Total Year-Round Beds (TH)', 'Total Year-Round Beds (SH)']
@@ -969,23 +1273,31 @@ class EnhancedCoCVisualizer:
                     homeless_total = pd.to_numeric(state_data['Overall Homeless'], errors='coerce').sum()
                     bed_totals['Overall Homeless'] = homeless_total
                 
+                # Calculate total beds
+                total_beds = sum([bed_totals.get(col, 0) for col in available_bed_cols])
+                bed_totals['Total Beds'] = total_beds
                 bed_totals['State'] = state
                 state_bed_data.append(bed_totals)
             
             df_beds = pd.DataFrame(state_bed_data)
             
-            # Sort data
-            if 'Total Year-Round Beds (ES, TH, SH)' in gdf_filtered.columns:
-                sort_col = 'Total Year-Round Beds (ES, TH, SH)'
-                df_beds['Total Beds'] = pd.to_numeric(gdf_filtered.groupby('State')['Total Year-Round Beds (ES, TH, SH)'].sum(), errors='coerce')
-                df_beds = df_beds.sort_values('Total Beds', ascending=True)
-            else:
-                # If no total beds, sort by ES beds
-                if 'Total Year-Round Beds (ES)' in df_beds.columns:
-                    df_beds = df_beds.sort_values('Total Year-Round Beds (ES)', ascending=True)
+            # Sort by total beds in descending order
+            df_beds = df_beds.sort_values('Total Beds', ascending=False)
             
-            # Show only top 15 states to avoid overcrowded chart
-            df_beds = df_beds.tail(15)
+            # Add expand functionality with user control
+            expand_option = st.selectbox(
+                "📊 Display Options:",
+                ["Top 15 States", "Top 25 States", "All States"],
+                index=0,
+                key="bed_analysis_expand"
+            )
+            
+            if expand_option == "Top 15 States":
+                df_display = df_beds.head(15)
+            elif expand_option == "Top 25 States":
+                df_display = df_beds.head(25)
+            else:
+                df_display = df_beds
             
             # Create stacked horizontal bar chart
             fig = go.Figure()
@@ -1002,24 +1314,27 @@ class EnhancedCoCVisualizer:
                 'Total Year-Round Beds (SH)': 'Safe Haven (SH)'
             }
             
+            # Reverse order for better visualization (highest at top)
+            df_display_reversed = df_display.iloc[::-1]
+            
             for col in available_bed_cols:
-                if col in df_beds.columns:
+                if col in df_display_reversed.columns:
                     fig.add_trace(go.Bar(
                         name=bed_labels.get(col, col),
-                        y=df_beds['State'],
-                        x=df_beds[col],
+                        y=df_display_reversed['State'],
+                        x=df_display_reversed[col],
                         orientation='h',
                         marker_color=colors.get(col, '#95A5A6'),
-                        text=[f'{val:,.0f}' if val > 0 else '' for val in df_beds[col]],
+                        text=[f'{val:,.0f}' if val > 0 else '' for val in df_display_reversed[col]],
                         textposition='inside',
                         textfont=dict(color='white', size=10)
                     ))
             
             # Add total homeless count as reference line (if available)
-            if 'Overall Homeless' in df_beds.columns:
+            if 'Overall Homeless' in df_display_reversed.columns:
                 fig.add_trace(go.Scatter(
-                    x=df_beds['Overall Homeless'],
-                    y=df_beds['State'],
+                    x=df_display_reversed['Overall Homeless'],
+                    y=df_display_reversed['State'],
                     mode='markers',
                     name='Total Homeless',
                     marker=dict(
@@ -1028,13 +1343,16 @@ class EnhancedCoCVisualizer:
                         color='orange',
                         line=dict(width=2, color='darkorange')
                     ),
-                    text=[f'Homeless: {val:,.0f}' for val in df_beds['Overall Homeless']],
+                    text=[f'Homeless: {val:,.0f}' for val in df_display_reversed['Overall Homeless']],
                     hovertemplate='%{text}<extra></extra>'
                 ))
             
+            # Calculate dynamic height based on number of states
+            chart_height = max(400, len(df_display) * 25 + 100)
+            
             fig.update_layout(
                 title=dict(
-                    text="State Bed Capacity Comparison Analysis (Top 15)",
+                    text=f"State Bed Capacity Analysis ({expand_option}) - Sorted by Total Beds",
                     x=0.5,
                     xanchor='center',
                     font=dict(size=16)
@@ -1042,7 +1360,7 @@ class EnhancedCoCVisualizer:
                 xaxis_title="Number of Beds",
                 yaxis_title="State",
                 barmode='stack',
-                height=500,
+                height=chart_height,
                 plot_bgcolor='white',
                 paper_bgcolor='white',
                 legend=dict(
@@ -1054,6 +1372,44 @@ class EnhancedCoCVisualizer:
                 ),
                 margin=dict(l=80, r=50, t=80, b=50)
             )
+            
+            # Add summary statistics
+            st.markdown("### 📊 Bed Capacity Summary")
+            total_beds_all = df_beds['Total Beds'].sum()
+            total_homeless_all = df_beds['Overall Homeless'].sum() if 'Overall Homeless' in df_beds.columns else 0
+            avg_beds_per_state = df_beds['Total Beds'].mean()
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Beds (All States)", f"{total_beds_all:,.0f}")
+            with col2:
+                st.metric("Total Homeless (All States)", f"{total_homeless_all:,.0f}")
+            with col3:
+                st.metric("Avg Beds per State", f"{avg_beds_per_state:,.0f}")
+                
+            # Display detailed table with expand feature
+            with st.expander("📋 View Detailed Bed Capacity Data Table", expanded=False):
+                # Create detailed table
+                display_table = df_beds[['State', 'Total Beds'] + available_bed_cols + (['Overall Homeless'] if 'Overall Homeless' in df_beds.columns else [])].copy()
+                display_table = display_table.round(0)
+                
+                # Add ranking
+                display_table.insert(0, 'Rank', range(1, len(display_table) + 1))
+                
+                st.dataframe(
+                    display_table,
+                    use_container_width=True,
+                    height=400
+                )
+                
+                # Download option
+                csv_data = display_table.to_csv(index=False)
+                st.download_button(
+                    label="📥 Download Bed Capacity Data (CSV)",
+                    data=csv_data,
+                    file_name="bed_capacity_analysis.csv",
+                    mime="text/csv"
+                )
             
             return fig
             
@@ -1294,28 +1650,33 @@ class EnhancedCoCVisualizer:
             st.plotly_chart(bed_fig, use_container_width=True)
             st.markdown("---")
             
-            # Add bivariate change map 
-            if selected_year > 2007:
-                st.markdown("""
-                <h3 style='text-align: center; color: #1f4e79; margin: 1rem 0;'>🔄 Annual Change Analysis Map</h3>
-                """, unsafe_allow_html=True)
-                bivariate_fig = self.create_bivariate_change_map(self.gdf, selected_year)
-                if bivariate_fig:
-                    st.markdown("---")
-        
-        # Trend analysis and correlation analysis
-        col3, col4 = st.columns(2)
-        
-        with col3:
+            # Add shelter-homeless correlation map 
             st.markdown("""
-            <h3 style='text-align: center; color: #1f4e79; margin: 1rem 0;'>📈 Time Trend Analysis</h3>
+            <h3 style='text-align: center; color: #1f4e79; margin: 1rem 0;'>🔗 Shelter Facility & Homeless Correlation Analysis</h3>
+            """, unsafe_allow_html=True)
+            correlation_fig = self.create_shelter_homeless_correlation_map(self.gdf, selected_year)
+            if correlation_fig:
+                st.markdown("---")
+        
+        # Optimized layout: Trend analysis and correlation analysis in one row
+        st.markdown("---")
+        
+        col_trend, col_corr = st.columns([1, 1], gap="medium")
+        
+        with col_trend:
+            st.markdown("""
+            <div style='text-align: center; margin-bottom: 1rem;'>
+                <h3 style='color: #1f4e79; margin: 0.5rem 0;'>📈 Time Trend Analysis</h3>
+            </div>
             """, unsafe_allow_html=True)
             trend_fig = self.create_trend_analysis(self.gdf, selected_states, selected_indicator)
             st.plotly_chart(trend_fig, use_container_width=True)
         
-        with col4:
+        with col_corr:
             st.markdown("""
-            <h3 style='text-align: center; color: #1f4e79; margin: 1rem 0;'>🔗 Indicator Correlation Analysis</h3>
+            <div style='text-align: center; margin-bottom: 1rem;'>
+                <h3 style='color: #1f4e79; margin: 0.5rem 0;'>🔗 Indicator Correlation Analysis</h3>
+            </div>
             """, unsafe_allow_html=True)
             correlation_fig = self.create_correlation_analysis(gdf_filtered)
             st.plotly_chart(correlation_fig, use_container_width=True)
